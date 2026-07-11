@@ -1,8 +1,8 @@
 import { ccc } from "@ckb-ccc/ccc";
 
-const LEGACY_DATA_PREFIX = '{"app":"vericell"';
+export const LEGACY_DATA_PREFIX = '{"app":"vericell"';
 
-function looksLikeVeriCellData(outputData: ccc.Hex): boolean {
+export function looksLikeVeriCellData(outputData: ccc.Hex): boolean {
   const bytes = ccc.bytesFrom(outputData);
   const prefix = new TextDecoder().decode(bytes.slice(0, LEGACY_DATA_PREFIX.length));
   return prefix === LEGACY_DATA_PREFIX;

@@ -9,6 +9,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
+    "test:offckb": "OFFCKB=1 vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "@ckb-ccc/ccc": "^1.2.3",
+    "better-sqlite3": "^12.4.1",
+    "chain": "workspace:*",
+    "core": "workspace:*",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
   }
 }

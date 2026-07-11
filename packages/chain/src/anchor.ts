@@ -1,5 +1,6 @@
 import { ccc } from "@ckb-ccc/ccc";
 import { DEFAULT_FEE_RATE } from "./constants.js";
+import { PURE_CAPACITY_FILTER } from "./filters.js";
 import { reserveSighashWitness } from "./witness.js";
 
 export interface BuildAnchorTxParams {
@@ -33,7 +34,7 @@ export async function buildAnchorTx(params: BuildAnchorTxParams): Promise<ccc.Tr
   });
 
   const signer = new ccc.SignerCkbScriptReadonly(client, lock);
-  await tx.completeInputsByCapacity(signer);
+  await tx.completeInputsByCapacity(signer, undefined, PURE_CAPACITY_FILTER);
   await reserveSighashWitness(tx, lock, client);
   await tx.completeFeeBy(signer, feeRate ?? DEFAULT_FEE_RATE);
 
@@ -97,14 +98,14 @@ export async function buildAnchorTxWithTypeId(
     // Type ID args are derived from the tx's first input, so one must
     // exist before we can compute them — even if capacity doesn't
     // otherwise require an input yet.
-    await tx.completeInputsAtLeastOne(signer);
+    await tx.completeInputsAtLeastOne(signer, PURE_CAPACITY_FILTER);
     typeId = ccc.hashTypeId(tx.inputs[0]!, 0);
     const typeIdInfo = await client.getKnownScript(ccc.KnownScript.TypeId);
     await tx.addCellDepInfos(client, typeIdInfo.cellDeps);
     tx.addOutput({ lock, type: ccc.Script.from({ ...typeIdInfo, args: typeId }) }, manifestBytes);
   }
 
-  await tx.completeInputsByCapacity(signer);
+  await tx.completeInputsByCapacity(signer, undefined, PURE_CAPACITY_FILTER);
   await reserveSighashWitness(tx, lock, client);
   await tx.completeFeeBy(signer, feeRate ?? DEFAULT_FEE_RATE);
 
