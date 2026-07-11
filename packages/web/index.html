@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VeriCell — Prove your work on Nervos CKB</title>
+    <meta
+      name="description"
+      content="Anchor the SHA-256 fingerprints of any project in a live CKB cell. Prove authorship, integrity and time — verifiable by anyone, forever."
+    />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <rect
+            x="2"
+            y="2"
+            width="20"
+            height="20"
+            rx="3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          />
+          <rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" />
+        </svg>
+        VeriCell
+      </a>
+      <nav class="topnav">
+        <a href="#create">Create proof</a>
+        <a href="#verify">Verify</a>
+        <a href="#how">How it works</a>
+        <select id="networkSelect" class="net-select" title="CKB network">
+          <option value="testnet" selected>Testnet</option>
+          <option value="mainnet">Mainnet</option>
+        </select>
+      </nav>
+      <button id="connectBtn" class="connect-btn">Connect wallet</button>
+    </header>
+
+    <main id="top">
+      <!-- ============ HERO ============ -->
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Proof of authorship · integrity · time</p>
+          <h1>Your work, fingerprinted.<br />Anchored on CKB.</h1>
+          <p class="lede">
+            AI makes it trivial to alter files, images and code. A SHA-256 hash proves a file is
+            untampered — but not <em>when</em> it existed, <em>who</em> published it, or
+            <em>where</em> to find the current version. VeriCell stores your project's hash manifest
+            in a live cell on the Nervos CKB blockchain: immutable, timestamped, owned by your
+            wallet, and updatable version by version.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#create">Create a proof</a>
+            <a class="btn btn-ghost" href="#verify">Verify a file</a>
+          </div>
+        </div>
+        <div class="hero-demo panel">
+          <p class="panel-label">Try it — hash a file locally</p>
+          <div id="heroDrop" class="dropzone">
+            <p>Drop any file here</p>
+            <p class="hint">Hashed in your browser. Nothing is uploaded.</p>
+          </div>
+          <div id="heroHashOut" class="hash-out" hidden>
+            <div class="fp-strip" data-fp></div>
+            <code class="hash-code" data-hash></code>
+            <button class="btn btn-small" id="heroSearchBtn">Search this hash on VeriCell</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ FEATURES ============ -->
+      <section class="features">
+        <div class="feature">
+          <h3>Only fingerprints on-chain</h3>
+          <p>
+            Your files never leave your computer. The cell stores the project title, file paths and
+            their SHA-256 hashes — nothing else. Private by design.
+          </p>
+        </div>
+        <div class="feature">
+          <h3>A cell that lives with your version</h3>
+          <p>
+            The proof is a live CKB cell. Release a new version and the old cell is consumed into a
+            new one — an unbroken, verifiable version chain back to the original.
+          </p>
+        </div>
+        <div class="feature">
+          <h3>Verifiable by anyone</h3>
+          <p>
+            No account, no login. Anyone can drop a file, recompute its hash and check it against
+            the chain — the block header proves the timestamp, the lock proves the owner.
+          </p>
+        </div>
+      </section>
+
+      <!-- ============ CREATE ============ -->
+      <section id="create" class="workmask">
+        <div class="mask-head">
+          <h2>Create a project proof</h2>
+          <p id="createGate" class="gate-note">
+            Connect your wallet to create proofs. Verifying never requires login.
+          </p>
+        </div>
+
+        <div id="createPanel" class="panel create-panel is-locked">
+          <div class="form-row">
+            <label for="projTitle">Project title</label>
+            <input
+              id="projTitle"
+              type="text"
+              placeholder="e.g. EasyTransfer v1.4.0"
+              maxlength="120"
+            />
+          </div>
+          <div class="form-row">
+            <label for="projUrl"
+              >Source URL
+              <span class="opt">(optional — where to find the latest version)</span></label
+            >
+            <input id="projUrl" type="url" placeholder="https://github.com/you/project" />
+          </div>
+
+          <div class="src-tabs" role="tablist">
+            <button class="src-tab is-active" data-src="files">Local files</button>
+            <button class="src-tab" data-src="folder">Folder</button>
+            <button class="src-tab" data-src="github">GitHub repo</button>
+            <button class="src-tab" data-src="url">Web page / URL</button>
+            <button class="src-tab" data-src="hash">Paste hashes</button>
+          </div>
+
+          <div class="src-body">
+            <div class="src-pane is-active" data-pane="files">
+              <input id="filesInput" type="file" multiple hidden />
+              <button class="btn btn-ghost" data-open="filesInput">Choose files…</button>
+            </div>
+            <div class="src-pane" data-pane="folder">
+              <input id="folderInput" type="file" webkitdirectory hidden />
+              <button class="btn btn-ghost" data-open="folderInput">Choose a folder…</button>
+            </div>
+            <div class="src-pane" data-pane="github">
+              <input id="ghRepo" type="text" placeholder="owner/repo or owner/repo@branch" />
+              <button class="btn btn-ghost" id="ghFetchBtn">Fetch &amp; hash repo</button>
+              <p class="hint">
+                Files are downloaded from raw.githubusercontent.com into your browser and hashed
+                locally (public repos, up to 200 files).
+              </p>
+            </div>
+            <div class="src-pane" data-pane="url">
+              <input id="urlInput" type="url" placeholder="https://example.com/page-or-file" />
+              <button class="btn btn-ghost" id="urlFetchBtn">Fetch &amp; hash URL</button>
+              <p class="hint">
+                Works when the server allows cross-origin requests (CORS). Otherwise download the
+                file and use “Local files”.
+              </p>
+            </div>
+            <div class="src-pane" data-pane="hash">
+              <textarea
+                id="hashPaste"
+                rows="4"
+                placeholder="one per line:  path/or/name  <sha256>&#10;myproject.zip 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+              ></textarea>
+              <button class="btn btn-ghost" id="hashAddBtn">Add hashes</button>
+            </div>
+          </div>
+
+          <div id="manifestBox" class="manifest" hidden>
+            <div class="manifest-head">
+              <p><strong id="fileCount">0</strong> entries · overall project hash:</p>
+              <div class="fp-strip" id="projFp"></div>
+              <code class="hash-code" id="projHash"></code>
+            </div>
+            <ul id="fileList" class="file-list"></ul>
+            <div class="storage-mode">
+              <label
+                ><input type="radio" name="storemode" value="full" checked /> Full manifest on-chain
+                <span class="hint" id="fullCost"></span
+              ></label>
+              <label
+                ><input type="radio" name="storemode" value="root" /> Compact — Merkle root only
+                <span class="hint" id="rootCost"></span
+              ></label>
+            </div>
+            <div class="submit-row">
+              <button class="btn btn-primary" id="submitBtn">Anchor proof on CKB</button>
+              <button class="btn btn-ghost btn-small" id="clearBtn">Clear</button>
+              <span id="submitStatus" class="status"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ VERIFY / SEARCH ============ -->
+      <section id="verify" class="workmask">
+        <div class="mask-head">
+          <h2>Search &amp; verify</h2>
+          <p class="gate-note">Open to everyone — no wallet needed.</p>
+        </div>
+        <div class="panel">
+          <div class="search-row">
+            <input
+              id="searchInput"
+              type="text"
+              placeholder="SHA-256 hash, project title, CKB address or tx hash…"
+            />
+            <button class="btn btn-primary" id="searchBtn">Search</button>
+          </div>
+          <div id="verifyDrop" class="dropzone slim">
+            <p>…or drop a file to hash and verify it</p>
+          </div>
+          <div id="searchResults" class="results"></div>
+        </div>
+      </section>
+
+      <!-- ============ PROJECT DETAIL ============ -->
+      <section id="detail" class="workmask" hidden>
+        <div class="mask-head"><h2>Project proof</h2></div>
+        <div class="panel" id="detailPanel"></div>
+      </section>
+
+      <!-- ============ HOW IT WORKS ============ -->
+      <section id="how" class="howto">
+        <h2>How it works</h2>
+        <ol class="steps">
+          <li>
+            <strong>Select your work.</strong> Files, a folder, a GitHub repository or a URL. Every
+            file is hashed with SHA-256 locally in your browser — content never leaves your machine.
+          </li>
+          <li>
+            <strong>Anchor it.</strong> VeriCell builds a manifest (title, paths, hashes, source
+            URL, overall hash) and writes it into the data of a new live cell locked to your wallet
+            address. The block header fixes the timestamp; the lock script fixes the owner.
+          </li>
+          <li>
+            <strong>Verify forever.</strong> Anyone can recompute a file's hash and check it against
+            the live cell. Ship a new version? Consume the old cell into a new one — the transaction
+            chain is the version history.
+          </li>
+        </ol>
+        <p class="fine">
+          On CKB, 1 CKB token = 1 byte of on-chain space. A compact Merkle-root proof needs ~200
+          CKB; a full manifest scales with the number of files. Capacity is
+          <em>locked, not spent</em> — consume the cell and the CKB returns to you.
+        </p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        VeriCell — proof of authorship, integrity and time on
+        <a href="https://www.nervos.org" target="_blank" rel="noopener">Nervos CKB</a>. Built with
+        <a href="https://github.com/ckb-devrel/ccc" target="_blank" rel="noopener">CCC</a>.
+      </p>
+      <p class="fine">Fingerprints only. Your files stay yours.</p>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

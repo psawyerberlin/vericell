@@ -1,0 +1,14 @@
+{
+  "name": "chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "VeriCell CKB chain layer: tx building, type ID, RPC helpers.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint ."
+  }
+}

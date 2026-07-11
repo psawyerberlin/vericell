@@ -1,0 +1,17 @@
+{
+  "name": "cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "vericell command-line tool.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "vericell": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint ."
+  }
+}
