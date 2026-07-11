@@ -10,5 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
   }
 }
