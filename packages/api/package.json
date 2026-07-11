@@ -7,16 +7,22 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node dist/scripts/writeOpenapi.js",
     "test": "vitest run --passWithNoTests",
     "test:offckb": "OFFCKB=1 vitest run --passWithNoTests",
     "lint": "eslint ."
   },
   "dependencies": {
     "@ckb-ccc/ccc": "^1.2.3",
+    "@fastify/cors": "^10.0.1",
+    "@fastify/rate-limit": "^10.2.1",
+    "@fastify/swagger": "^9.4.0",
+    "@fastify/swagger-ui": "^5.2.0",
     "better-sqlite3": "^12.4.1",
     "chain": "workspace:*",
     "core": "workspace:*",
+    "fastify": "^5.2.0",
+    "fastify-type-provider-zod": "^4.0.2",
     "pino": "^9.5.0",
     "zod": "^3.24.1"
   },

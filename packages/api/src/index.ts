@@ -14,5 +14,13 @@ export {
   rollback,
   type SyncState,
 } from "./indexer/index.js";
+export { buildServer, type BuildServerOptions, type TypedApp } from "./server/build.js";
+export {
+  defaultFetchProof,
+  defaultGetTip,
+  type FetchProofFn,
+  type GetTipFn,
+} from "./server/chainLookup.js";
+export { ProblemError, NotFoundError, BadGatewayError } from "./server/errors.js";
 
-// Phase 4+ fills this in: Fastify server.
+// Phase 5+ fills this in: authenticated write endpoints.
