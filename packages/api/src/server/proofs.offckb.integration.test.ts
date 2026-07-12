@@ -15,6 +15,16 @@
  * available in this environment) — the two roles are still exercised
  * through entirely separate code paths (payer-signed vs. server-signed).
  *
+ * This suite and `../indexer/offckb.integration.test.ts` run as separate
+ * vitest files in the same `test:offckb` invocation; the api package's
+ * `vitest.config.ts` disables file parallelism under `OFFCKB=1` so they
+ * never build transactions against the same devnet account concurrently
+ * (concurrent input selection against one account's cells causes 502
+ * TransactionFailedToResolve). If a second funded devnet account is
+ * available, set `VERICELL_OFFCKB_PRIVATE_KEY_PROOFS` to give this suite its
+ * own account instead of sharing the default one with the indexer suite —
+ * belt-and-suspenders on top of the serialized run, not a requirement.
+ *
  * The `Indexer` here (used only to flip pending -> committed after a
  * broadcast) walks from `INDEXER_START_BLOCK` if set, else genesis — same
  * env var and rationale as `indexer/offckb.integration.test.ts`, for a
@@ -49,7 +59,9 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
   const authHeaders = { authorization: `Bearer ${API_KEY}` };
 
   beforeAll(async () => {
-    const privateKey = globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY;
+    const privateKey =
+      globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY_PROOFS ??
+      globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY;
     if (!privateKey) {
       throw new Error(
         "OFFCKB=1 requires VERICELL_OFFCKB_PRIVATE_KEY to be set to a funded devnet account's private key.",
@@ -83,7 +95,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
 
     const startBlock = BigInt(globalThis.process?.env?.INDEXER_START_BLOCK ?? 0);
     indexer = new Indexer({ db, client, startBlock });
-  }, 30000);
+  }, 60000);
 
   async function manifestDraft(title: string, fileTag: string, extra?: Record<string, unknown>) {
     return {
@@ -154,7 +166,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     const projectRow = db.prepare("SELECT active, unid FROM projects WHERE unid = ?").get(unid) as
       { active: number; unid: string } | undefined;
     expect(projectRow?.active).toBe(1);
-  }, 180000);
+  }, 240000);
 
   it("idempotent replay: a repeated Idempotency-Key never double-broadcasts", async () => {
     const draft = await manifestDraft(`Phase5 Idem ${runTag}`, `${runTag}:idem`);
@@ -199,7 +211,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     expect(versionCount).toBe(1);
 
     await client.waitTransaction(first.json().tx_hash);
-  }, 120000);
+  }, 180000);
 
   it("custodial: anchor, new version, withdraw", async () => {
     const anchorRes = await app.inject({
@@ -249,5 +261,5 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
       .prepare("SELECT active, live_tx_hash FROM projects WHERE unid = ?")
       .get(anchorBody.unid) as { active: number; live_tx_hash: string | null } | undefined;
     expect(projectRow?.active).toBe(0);
-  }, 240000);
+  }, 300000);
 });

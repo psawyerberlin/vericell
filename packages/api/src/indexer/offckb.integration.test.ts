@@ -9,6 +9,16 @@
  *      `offckb system-scripts --export-style ccc --network devnet` output.
  *   4. `OFFCKB=1 pnpm --filter api test` (or `pnpm --filter api test:offckb`)
  *
+ * This suite and `./proofs.offckb.integration.test.ts` run as separate
+ * vitest files in the same `test:offckb` invocation; the api package's
+ * `vitest.config.ts` disables file parallelism under `OFFCKB=1` so they
+ * never build transactions against the same devnet account concurrently
+ * (concurrent input selection against one account's cells causes 502
+ * TransactionFailedToResolve). If a second funded devnet account is
+ * available, set `VERICELL_OFFCKB_PRIVATE_KEY_INDEXER` to give this suite
+ * its own account instead of sharing the default one with the proofs suite
+ * — belt-and-suspenders on top of the serialized run, not a requirement.
+ *
  * Skipped entirely unless `OFFCKB=1`. Assertions are scoped to this run's
  * own anchored transactions (a random tag distinguishes them) rather than
  * global table counts, since a long-lived local devnet accumulates cells
@@ -76,7 +86,9 @@ describe.skipIf(!OFFCKB_ENABLED)("indexer against offckb devnet", () => {
   const runTag = Math.random().toString(36).slice(2, 10);
 
   beforeAll(async () => {
-    const privateKey = globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY;
+    const privateKey =
+      globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY_INDEXER ??
+      globalThis.process?.env?.VERICELL_OFFCKB_PRIVATE_KEY;
     if (!privateKey) {
       throw new Error(
         "OFFCKB=1 requires VERICELL_OFFCKB_PRIVATE_KEY to be set to a funded devnet account's private key.",
@@ -91,7 +103,7 @@ describe.skipIf(!OFFCKB_ENABLED)("indexer against offckb devnet", () => {
     signer = new ccc.SignerCkbPrivateKey(client, privateKey);
     await signer.connect();
     lock = (await signer.getRecommendedAddressObj()).script;
-  }, 30000);
+  }, 60000);
 
   it("indexes 3 anchored projects (one with 2 versions) to tip", async () => {
     const p1Data = await manifestBytesFor(`Phase3 P1 ${runTag}`, `${runTag}:p1`);

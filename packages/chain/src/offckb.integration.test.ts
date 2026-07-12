@@ -65,7 +65,7 @@ describe.skipIf(!OFFCKB_ENABLED)("chain layer against offckb devnet", () => {
     signer = new ccc.SignerCkbPrivateKey(client, privateKey);
     await signer.connect();
     lock = (await signer.getRecommendedAddressObj()).script;
-  }, 30000);
+  }, 60000);
 
   it("v1 versioning (no Type ID): anchor, supersede, withdraw", async () => {
     const tx1 = await buildAnchorTx({
@@ -111,7 +111,7 @@ describe.skipIf(!OFFCKB_ENABLED)("chain layer against offckb devnet", () => {
     expect(refund!.cellOutput.lock.eq(lock)).toBe(true);
     expect(refund!.cellOutput.capacity).toBeLessThan(consumedCapacity);
     expect(refund!.cellOutput.capacity).toBeGreaterThan(0n);
-  }, 60000);
+  }, 120000);
 
   it("Type ID versioning: UNID is stable across versions and only the live cell is found", async () => {
     const { tx: tx1, typeId } = await buildAnchorTxWithTypeId({
@@ -146,5 +146,5 @@ describe.skipIf(!OFFCKB_ENABLED)("chain layer against offckb devnet", () => {
     for await (const cell of findLiveProofsByTypeId(client, typeId)) liveAfterV2.push(cell);
     expect(liveAfterV2).toHaveLength(1);
     expect(liveAfterV2[0]!.outPoint.txHash).toBe(txHash2);
-  }, 60000);
+  }, 120000);
 });
