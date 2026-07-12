@@ -1,6 +1,7 @@
 import pino from "pino";
 import { NETWORK } from "core";
 import { openDb } from "../db/open.js";
+import { warnIfMainnet } from "../mainnetWarning.js";
 import { buildServer } from "./build.js";
 
 /** Standalone API server entrypoint (Phase 10's `api` compose service). */
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
       censor: "[redacted]",
     },
   });
+  warnIfMainnet(logger, NETWORK);
   const db = openDb();
   const port = Number(globalThis.process?.env?.PORT ?? 3000);
 

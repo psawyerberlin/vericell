@@ -2,11 +2,13 @@ import pino from "pino";
 import { makeClient } from "chain";
 import { NETWORK } from "core";
 import { openDb } from "../db/open.js";
+import { warnIfMainnet } from "../mainnetWarning.js";
 import { Indexer } from "./indexer.js";
 
 /** Standalone indexer worker entrypoint (Phase 10's `indexer` compose service). */
 async function main(): Promise<void> {
   const logger = pino({ level: globalThis.process?.env?.LOG_LEVEL ?? "info" });
+  warnIfMainnet(logger, NETWORK);
   const db = openDb();
   const client = makeClient();
 
