@@ -15,6 +15,10 @@ program
     "Prove authorship, integrity and time of a project by anchoring its SHA-256 manifest on CKB.",
   );
 
+// A bare origin (http://host:3000) and a full base URL (http://host:3000/api/v1)
+// both work — /api/v1 is appended automatically when missing (lib/apiClient.ts).
+const API_URL_HELP = "VeriCell API URL — a bare origin or the full /api/v1 base URL";
+
 /** Prints an error uniformly (text or `--json`) and returns the process exit code for it. */
 function reportError(err: unknown, json: boolean | undefined): number {
   const message = err instanceof Error ? err.message : String(err);
@@ -49,7 +53,7 @@ program
   .command("anchor")
   .description("Anchor a manifest on-chain via the VeriCell API (TECHNICAL.md §7.5)")
   .argument("<manifest>", "path to a manifest.json produced by `vericell hash`")
-  .requiredOption("--api <url>", "VeriCell API base URL, e.g. https://api.example.com/api/v1")
+  .requiredOption("--api <url>", API_URL_HELP)
   .requiredOption("--key <key>", "VeriCell API key")
   .requiredOption("--mode <mode>", "non-custodial or custodial")
   .option(
@@ -70,7 +74,7 @@ program
   .command("verify")
   .description("Hash a local file and check it against the VeriCell index")
   .argument("<file>", "file to verify")
-  .requiredOption("--api <url>", "VeriCell API base URL")
+  .requiredOption("--api <url>", API_URL_HELP)
   .option("--json", "machine-readable output")
   .action(async (filePath: string, opts: VerifyOptions) => {
     try {
@@ -85,7 +89,7 @@ program
   .command("status")
   .description("Show a project's on-chain status and version history")
   .argument("<unid>", "project UNID")
-  .requiredOption("--api <url>", "VeriCell API base URL")
+  .requiredOption("--api <url>", API_URL_HELP)
   .option("--json", "machine-readable output")
   .action(async (unid: string, opts: StatusOptions) => {
     try {
@@ -99,7 +103,7 @@ program
   .command("withdraw")
   .description("Withdraw a project's live proof cell (consume without a successor)")
   .argument("<unid>", "project UNID")
-  .requiredOption("--api <url>", "VeriCell API base URL")
+  .requiredOption("--api <url>", API_URL_HELP)
   .requiredOption("--key <key>", "VeriCell API key")
   .option("--mode <mode>", "non-custodial or custodial (default: custodial)")
   .option(
