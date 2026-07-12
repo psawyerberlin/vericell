@@ -14,10 +14,17 @@ export {
   rollback,
   type SyncState,
 } from "./indexer/index.js";
-export { buildServer, type BuildServerOptions, type TypedApp } from "./server/build.js";
+export {
+  buildServer,
+  type BuildServerOptions,
+  type NetworkBinding,
+  type TypedApp,
+} from "./server/build.js";
 export {
   defaultFetchProof,
   defaultGetTip,
+  makeDefaultFetchProof,
+  makeDefaultGetTip,
   type FetchProofFn,
   type GetTipFn,
 } from "./server/chainLookup.js";
@@ -40,6 +47,8 @@ export { withIdempotency } from "./server/idempotency.js";
 export {
   defaultGetChainClient,
   defaultGetCustodialSigner,
+  makeDefaultGetChainClient,
+  makeDefaultGetCustodialSigner,
   resolveCustodialEnabled,
   type GetChainClientFn,
   type GetCustodialSignerFn,

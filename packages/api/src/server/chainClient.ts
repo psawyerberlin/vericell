@@ -4,19 +4,32 @@ import { NETWORK, type Network } from "core";
 export type GetChainClientFn = () => ccc.Client;
 export type GetCustodialSignerFn = () => Promise<ccc.SignerCkbPrivateKey>;
 
-let cachedClient: ccc.Client | null = null;
+const cachedClients = new Map<Network, ccc.Client>();
 
 /**
- * A raw `ccc.Client`, lazily built so importing/testing this module never
- * opens a network connection by itself — same rationale as
- * `chainLookup.ts`'s `getClient()`. `/proofs/prepare|submit` and the
- * custodial routes need the real client (not just `fetchProof`/`getTip`),
- * since they call into `chain`'s tx builders and `sendTransaction`.
+ * A raw `ccc.Client`, lazily built and cached *per network* so importing/
+ * testing this module never opens a network connection by itself — same
+ * rationale as `chainLookup.ts`'s `getClient()`, and the same per-network
+ * keying (Phase 10a: one API process now serves testnet and mainnet at
+ * once, so a single shared client would leak across them).
+ * `/proofs/prepare|submit` and the custodial routes need the real client
+ * (not just `fetchProof`/`getTip`), since they call into `chain`'s tx
+ * builders and `sendTransaction`.
  */
-export const defaultGetChainClient: GetChainClientFn = () => {
-  cachedClient ??= makeClient();
-  return cachedClient;
-};
+function getOrMakeClient(network: Network): ccc.Client {
+  let client = cachedClients.get(network);
+  if (!client) {
+    client = makeClient(network);
+    cachedClients.set(network, client);
+  }
+  return client;
+}
+
+export function makeDefaultGetChainClient(network: Network = NETWORK): GetChainClientFn {
+  return () => getOrMakeClient(network);
+}
+
+export const defaultGetChainClient: GetChainClientFn = makeDefaultGetChainClient();
 
 function truthyEnvFlag(value: string | undefined): boolean {
   return value === "1" || value?.toLowerCase() === "true";
@@ -47,23 +60,34 @@ export function resolveCustodialEnabled(
   return true;
 }
 
-let cachedSigner: Promise<ccc.SignerCkbPrivateKey> | null = null;
+const cachedSigners = new Map<Network, Promise<ccc.SignerCkbPrivateKey>>();
 
 /**
  * Lazily built + connected service-wallet signer for custodial mode, cached
- * across requests. Throws (on first use, not at import time) if
- * `SERVICE_PRIVATE_KEY` isn't set — routes only call this once they've
- * already confirmed custodial mode is enabled.
+ * per network (Phase 10a: testnet and mainnet each get their own connected
+ * signer instance, sharing the one `SERVICE_PRIVATE_KEY` — the same keypair
+ * is valid on both chains, only its address encoding differs). Throws (on
+ * first use, not at import time) if `SERVICE_PRIVATE_KEY` isn't set — routes
+ * only call this once they've already confirmed custodial mode is enabled
+ * for that network.
  */
-export const defaultGetCustodialSigner: GetCustodialSignerFn = () => {
-  cachedSigner ??= (async () => {
-    const privateKey = globalThis.process?.env?.SERVICE_PRIVATE_KEY;
-    if (!privateKey) {
-      throw new Error("CUSTODIAL_ENABLED requires SERVICE_PRIVATE_KEY to be set");
+export function makeDefaultGetCustodialSigner(network: Network = NETWORK): GetCustodialSignerFn {
+  return () => {
+    let pending = cachedSigners.get(network);
+    if (!pending) {
+      pending = (async () => {
+        const privateKey = globalThis.process?.env?.SERVICE_PRIVATE_KEY;
+        if (!privateKey) {
+          throw new Error("CUSTODIAL_ENABLED requires SERVICE_PRIVATE_KEY to be set");
+        }
+        const signer = new ccc.SignerCkbPrivateKey(getOrMakeClient(network), privateKey);
+        await signer.connect();
+        return signer;
+      })();
+      cachedSigners.set(network, pending);
     }
-    const signer = new ccc.SignerCkbPrivateKey(defaultGetChainClient(), privateKey);
-    await signer.connect();
-    return signer;
-  })();
-  return cachedSigner;
-};
+    return pending;
+  };
+}
+
+export const defaultGetCustodialSigner: GetCustodialSignerFn = makeDefaultGetCustodialSigner();

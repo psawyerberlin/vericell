@@ -19,7 +19,7 @@ function generateWebhookSecret(): string {
  */
 export function registerWebhookRoutes(app: TypedApp): void {
   app.post(
-    "/api/v1/webhooks",
+    "/webhooks",
     {
       schema: {
         tags: ["webhooks"],
@@ -61,7 +61,7 @@ export function registerWebhookRoutes(app: TypedApp): void {
   );
 
   app.delete(
-    "/api/v1/webhooks/:id",
+    "/webhooks/:id",
     {
       schema: {
         tags: ["webhooks"],

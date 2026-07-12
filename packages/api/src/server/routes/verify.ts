@@ -5,7 +5,7 @@ import type { TypedApp } from "../build.js";
 /** TECHNICAL.md §7.1 literal response shape: `{ found, live, project, version, block_time, path }`. */
 export function registerVerifyRoutes(app: TypedApp): void {
   app.get(
-    "/api/v1/verify/:sha256",
+    "/verify/:sha256",
     {
       schema: {
         tags: ["hashes"],

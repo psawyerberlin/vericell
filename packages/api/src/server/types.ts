@@ -15,6 +15,14 @@ declare module "fastify" {
     adminToken: string | undefined;
     custodialEnabled: boolean;
     getCustodialSigner: GetCustodialSignerFn;
+    /**
+     * Only decorated on the network-less alias scope (`/api/v1/...`,
+     * Phase 10a) — every configured network's db + tip lookup, so `/health`
+     * and `/stats` can report every mounted network there, not just the
+     * default one. Absent on the `/api/v1/<network>/...` scopes, which only
+     * ever report their own single network.
+     */
+    networkBindings?: Partial<Record<Network, { db: Database.Database; getTip: GetTipFn }>>;
   }
 
   interface FastifyRequest {

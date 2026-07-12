@@ -5,7 +5,7 @@ import type { TypedApp } from "../build.js";
 
 export function registerProjectRoutes(app: TypedApp): void {
   app.get(
-    "/api/v1/projects",
+    "/projects",
     {
       schema: {
         tags: ["projects"],
@@ -34,7 +34,7 @@ export function registerProjectRoutes(app: TypedApp): void {
   );
 
   app.get(
-    "/api/v1/projects/:unid",
+    "/projects/:unid",
     {
       schema: {
         tags: ["projects"],

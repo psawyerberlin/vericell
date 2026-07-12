@@ -342,8 +342,14 @@ describe("OpenAPI docs", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.openapi).toBe("3.1.0");
-    expect(body.paths["/api/v1/projects"]).toBeDefined();
-    expect(body.paths["/api/v1/versions/{txHash}"]).toBeDefined();
+    // Phase 10a: `servers` declares the /api/v1 base (TECHNICAL.md's network
+    // path parameter), so paths are relative to it — the alias ("/projects")
+    // and this server's own network-prefixed tree ("/devnet/projects") both
+    // show up, since `setup()`'s single binding is network "devnet".
+    expect(body.servers.some((s: { url: string }) => s.url === "/api/v1")).toBe(true);
+    expect(body.paths["/projects"]).toBeDefined();
+    expect(body.paths["/versions/{txHash}"]).toBeDefined();
+    expect(body.paths["/devnet/projects"]).toBeDefined();
   });
 
   it("serves the docs UI at /api/v1/docs", async () => {

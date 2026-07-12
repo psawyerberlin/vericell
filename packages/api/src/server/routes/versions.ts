@@ -15,7 +15,7 @@ import type { TypedApp } from "../build.js";
  */
 export function registerVersionRoutes(app: TypedApp): void {
   app.get(
-    "/api/v1/versions/:txHash",
+    "/versions/:txHash",
     {
       schema: {
         tags: ["versions"],

@@ -10,7 +10,7 @@ import type { TypedApp } from "../build.js";
  */
 export function registerKeyRoutes(app: TypedApp): void {
   app.post(
-    "/api/v1/keys",
+    "/keys",
     {
       schema: {
         tags: ["keys"],

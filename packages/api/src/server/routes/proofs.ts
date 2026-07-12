@@ -113,7 +113,7 @@ export function registerProofRoutes(app: TypedApp): void {
   // --- Non-custodial: the API prepares, the client signs. ---------------
 
   app.post(
-    "/api/v1/proofs/prepare",
+    "/proofs/prepare",
     {
       schema: {
         tags: ["proofs"],
@@ -153,7 +153,7 @@ export function registerProofRoutes(app: TypedApp): void {
   );
 
   app.post(
-    "/api/v1/proofs/submit",
+    "/proofs/submit",
     {
       schema: {
         tags: ["proofs"],
@@ -210,7 +210,7 @@ export function registerProofRoutes(app: TypedApp): void {
   // --- Custodial: the API signs with a server-held service wallet. ------
 
   app.post(
-    "/api/v1/proofs",
+    "/proofs",
     {
       schema: {
         tags: ["proofs"],
@@ -250,7 +250,7 @@ export function registerProofRoutes(app: TypedApp): void {
   );
 
   app.post(
-    "/api/v1/proofs/:unid/versions",
+    "/proofs/:unid/versions",
     {
       schema: {
         tags: ["proofs"],
@@ -312,7 +312,7 @@ export function registerProofRoutes(app: TypedApp): void {
   );
 
   app.delete(
-    "/api/v1/proofs/:unid",
+    "/proofs/:unid",
     {
       schema: {
         tags: ["proofs"],

@@ -4,7 +4,7 @@ import type { TypedApp } from "../build.js";
 
 export function registerHashRoutes(app: TypedApp): void {
   app.get(
-    "/api/v1/hashes/:sha256",
+    "/hashes/:sha256",
     {
       schema: {
         tags: ["hashes"],
