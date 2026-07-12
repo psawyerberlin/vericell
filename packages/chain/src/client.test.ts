@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ccc } from "@ckb-ccc/ccc";
 import { makeClient } from "./client.js";
@@ -6,6 +9,7 @@ describe("makeClient", () => {
   afterEach(() => {
     delete process.env.VERICELL_DEVNET_RPC_URL;
     delete process.env.VERICELL_RPC_URL;
+    delete process.env.VERICELL_DEVNET_SCRIPTS_FILE;
   });
 
   it("builds a ClientPublicMainnet for mainnet", () => {
@@ -45,5 +49,37 @@ describe("makeClient", () => {
     process.env.VERICELL_RPC_URL = "http://self-hosted.invalid:3333";
     const client = makeClient("devnet");
     expect(client.url).toBe("http://self-hosted.invalid:3333");
+  });
+
+  it("VERICELL_DEVNET_SCRIPTS_FILE overrides devnet's system scripts (no network call needed to resolve them)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vericell-client-test-"));
+    const codeHash = "0x" + "42".repeat(32);
+    const scriptsFile = join(dir, "scripts.json");
+    writeFileSync(
+      scriptsFile,
+      JSON.stringify({
+        Secp256k1Blake160: {
+          codeHash,
+          hashType: "type",
+          cellDeps: [
+            {
+              cellDep: {
+                outPoint: { txHash: "0x" + "11".repeat(32), index: 0 },
+                depType: "depGroup",
+              },
+            },
+          ],
+        },
+      }),
+    );
+    process.env.VERICELL_DEVNET_SCRIPTS_FILE = scriptsFile;
+
+    try {
+      const client = makeClient("devnet");
+      const info = await client.getKnownScript(ccc.KnownScript.Secp256k1Blake160);
+      expect(info.codeHash).toBe(codeHash);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

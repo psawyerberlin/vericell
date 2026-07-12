@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { ccc, FakeClient } from "chain";
+import { ccc, FakeClient, type ProofResult } from "chain";
 import { openDb } from "../../db/open.js";
 import { hashApiKey } from "../auth.js";
 import { buildServer, type TypedApp } from "../build.js";
 import type { GetCustodialSignerFn } from "../chainClient.js";
+import type { FetchProofFn } from "../chainLookup.js";
 
 // A fixed test-only private key — never used for anything but FakeClient
 // fixtures. FakeClient doesn't verify witness signatures, so its exact
@@ -33,9 +34,21 @@ interface Setup {
   client: FakeClient;
   payerLock: ccc.Script;
   payerSigner: ccc.SignerCkbPrivateKey;
+  serviceLock: ccc.Script;
 }
 
-async function setup(opts: { custodialEnabled?: boolean } = {}): Promise<Setup> {
+/** Default `fetchProofFromChain` for tests that never need a real chain-lookup answer. */
+const NULL_PROOF: ProofResult = {
+  manifest: null,
+  live: null,
+  blockNumber: null,
+  blockTime: null,
+  ownerAddress: null,
+};
+
+async function setup(
+  opts: { custodialEnabled?: boolean; fetchProof?: FetchProofFn } = {},
+): Promise<Setup> {
   const db = openDb(":memory:");
   db.prepare(
     "INSERT INTO api_keys (key_hash, label, created_at, rate_limit) VALUES (?, ?, ?, ?)",
@@ -60,13 +73,14 @@ async function setup(opts: { custodialEnabled?: boolean } = {}): Promise<Setup> 
     db,
     network: "devnet",
     chainClient: () => client,
+    fetchProof: opts.fetchProof ?? (async () => NULL_PROOF),
     adminToken: ADMIN_TOKEN,
     custodialEnabled: opts.custodialEnabled ?? false,
     custodialSigner,
     rateLimit: { max: 1000, timeWindow: "1 minute" },
   });
 
-  return { app, client, payerLock, payerSigner };
+  return { app, client, payerLock, payerSigner, serviceLock };
 }
 
 const MANIFEST_DRAFT = {
@@ -127,6 +141,220 @@ describe("POST /api/v1/proofs/prepare", () => {
       payload: { manifest: { title: "x", files: [] }, payer: { lock: ctx.payerLock } },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("resolves the payer from payer.address (not just payer.lock)", async () => {
+    const address = (await ctx.payerSigner.getRecommendedAddressObj()).toString();
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: MANIFEST_DRAFT, payer: { address } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tx.outputs[0].lock.args).toBe(ctx.payerLock.args);
+  });
+});
+
+describe("POST /api/v1/proofs/prepare — new version (prev_tx_hash)", () => {
+  async function anchorV1(ctx: Setup): Promise<{ txHash: string; manifest: unknown }> {
+    const prepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: MANIFEST_DRAFT, payer: { lock: ctx.payerLock } },
+    });
+    const prepared = prepareRes.json();
+    const signedTx = await ctx.payerSigner.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) as unknown },
+    });
+    return { txHash: submitRes.json().tx_hash as string, manifest: prepared.manifest };
+  }
+
+  it("consumes the previous live cell and links genesis/prev, carrying Type ID over", async () => {
+    const proofs = new Map<string, ProofResult>();
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+    const { txHash: v1TxHash, manifest: v1Manifest } = await anchorV1(ctx);
+    proofs.set(v1TxHash, {
+      manifest: v1Manifest as ProofResult["manifest"],
+      live: true,
+      blockNumber: 1n,
+      blockTime: new Date(),
+      ownerAddress: ccc.Address.fromScript(ctx.payerLock, ctx.client).toString(),
+    });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: { title: "v2", files: [{ p: "a.txt", h: "c".repeat(64) }] },
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: v1TxHash,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.manifest.genesis).toBe(v1TxHash);
+    expect(body.manifest.prev).toBe(v1TxHash);
+    expect(body.tx.inputs[0].previousOutput.txHash).toBe(v1TxHash);
+    // Type ID carried over from v1, per buildAnchorTxWithTypeId's update branch.
+    expect(body.tx.outputs[0].type).toBeDefined();
+  });
+
+  it("anchors a successor to a legacy (no Type ID) prev cell via the plain consuming builder", async () => {
+    const proofs = new Map<string, ProofResult>();
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+
+    // A pre-Type-ID v1 cell: seeded directly (no `type` script), rather than
+    // through a real anchor (which always attaches Type ID on this server).
+    const legacyTxHash = "0x" + "77".repeat(32);
+    ctx.client.addLiveCell({
+      outPoint: { txHash: legacyTxHash, index: 0 },
+      cellOutput: { capacity: ccc.fixedPointFrom(500), lock: ctx.payerLock },
+      outputData: "0x",
+    });
+    proofs.set(legacyTxHash, {
+      manifest: {
+        app: "vericell",
+        v: 1,
+        title: "legacy",
+        created: new Date().toISOString(),
+      } as never,
+      live: true,
+      blockNumber: 1n,
+      blockTime: new Date(),
+      ownerAddress: ccc.Address.fromScript(ctx.payerLock, ctx.client).toString(),
+    });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: MANIFEST_DRAFT,
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: legacyTxHash,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    // No Type ID: buildAnchorTx (not buildAnchorTxWithTypeId) built this tx.
+    expect(res.json().tx.outputs[0].type).toBeUndefined();
+  });
+
+  it("404s when prev_tx_hash has no proof on chain", async () => {
+    const ctx = await setup({ fetchProof: async () => NULL_PROOF });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: MANIFEST_DRAFT,
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: "0x" + "99".repeat(32),
+      },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("409s when prev_tx_hash is not live (already superseded or withdrawn)", async () => {
+    const deadTxHash = "0x" + "88".repeat(32);
+    const proofs = new Map<string, ProofResult>([
+      [
+        deadTxHash,
+        {
+          manifest: {
+            app: "vericell",
+            v: 1,
+            title: "dead",
+            created: new Date().toISOString(),
+          } as never,
+          live: false,
+          blockNumber: 1n,
+          blockTime: new Date(),
+          ownerAddress: null,
+        },
+      ],
+    ]);
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: MANIFEST_DRAFT,
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: deadTxHash,
+      },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("404s when the chain says prev_tx_hash is live but its cell can't be located", async () => {
+    // fetchProofFromChain (indexer/RPC-derived) says it's live, but the raw
+    // client.getCell lookup this FakeClient backs comes up empty — a
+    // genuinely inconsistent-state edge case, not just "not found at all".
+    const ghostTxHash = "0x" + "66".repeat(32);
+    const proofs = new Map<string, ProofResult>([
+      [
+        ghostTxHash,
+        {
+          manifest: {
+            app: "vericell",
+            v: 1,
+            title: "ghost",
+            created: new Date().toISOString(),
+          } as never,
+          live: true,
+          blockNumber: 1n,
+          blockTime: new Date(),
+          ownerAddress: null,
+        },
+      ],
+    ]);
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: MANIFEST_DRAFT,
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: ghostTxHash,
+      },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("Idempotency-Key reused across a different method/path", () => {
+  it("409s rather than replaying the wrong route's response", async () => {
+    const ctx = await setup();
+    const idemHeaders = { authorization: `Bearer ${API_KEY}`, "idempotency-key": "cross-route-1" };
+
+    const prepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: idemHeaders,
+      payload: { manifest: MANIFEST_DRAFT, payer: { lock: ctx.payerLock } },
+    });
+    expect(prepareRes.statusCode).toBe(200);
+
+    // Same key, same caller, but a different method+path — a caller error,
+    // not a cache hit (see idempotency.ts's getStoredResponse).
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: idemHeaders,
+      payload: { tx: prepareRes.json().tx },
+    });
+    expect(submitRes.statusCode).toBe(409);
   });
 });
 
@@ -199,6 +427,41 @@ describe("POST /api/v1/proofs/submit", () => {
       payload: { tx: { not: "a transaction" } },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("400s when output 0's data isn't a valid VeriCell manifest", async () => {
+    const tx = ccc.Transaction.from({
+      outputs: [{ capacity: 10_000_000_000n, lock: ctx.payerLock }],
+      outputsData: ["0x" + Buffer.from("not a manifest").toString("hex")],
+    });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(tx)) as unknown },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toMatch(/not a valid VeriCell manifest/);
+  });
+
+  it("502s when broadcast fails (e.g. an input referencing a dead/unknown outpoint)", async () => {
+    const { txJson } = await prepareAndSign();
+    const tx = ccc.Transaction.from(txJson as ccc.TransactionLike);
+    // Point the input at a cell FakeClient has never seen — mirrors a real
+    // node's TransactionFailedToResolve.
+    tx.inputs[0]!.previousOutput = ccc.OutPoint.from({
+      txHash: "0x" + "ee".repeat(32),
+      index: 0,
+    });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(tx)) as unknown },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().detail).toMatch(/Broadcast failed/);
   });
 
   it("Idempotency-Key replay returns the stored response without re-broadcasting", async () => {
@@ -305,7 +568,7 @@ describe("custodial proofs (CUSTODIAL_ENABLED)", () => {
     expect(projectRow?.live_tx_hash).toBeNull();
   });
 
-  it("404s versioning/withdrawing an unknown project", async () => {
+  it("404s withdrawing an unknown project", async () => {
     const ctx = await setup({ custodialEnabled: true });
     const res = await ctx.app.inject({
       method: "DELETE",
@@ -313,6 +576,52 @@ describe("custodial proofs (CUSTODIAL_ENABLED)", () => {
       headers: { authorization: `Bearer ${API_KEY}` },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("404s adding a version to an unknown project", async () => {
+    const ctx = await setup({ custodialEnabled: true });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/does-not-exist/versions",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("403s versioning/withdrawing a project the service wallet doesn't own", async () => {
+    const ctx = await setup({ custodialEnabled: true });
+    // Anchored non-custodially (payer-owned lock), not via the service wallet.
+    const prepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: MANIFEST_DRAFT, payer: { lock: ctx.payerLock } },
+    });
+    const prepared = prepareRes.json();
+    const signedTx = await ctx.payerSigner.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) as unknown },
+    });
+    const { unid } = submitRes.json();
+
+    const versionRes = await ctx.app.inject({
+      method: "POST",
+      url: `/api/v1/proofs/${unid}/versions`,
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
+    });
+    expect(versionRes.statusCode).toBe(403);
+
+    const withdrawRes = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/v1/proofs/${unid}`,
+      headers: { authorization: `Bearer ${API_KEY}` },
+    });
+    expect(withdrawRes.statusCode).toBe(403);
   });
 });
 

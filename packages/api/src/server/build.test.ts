@@ -162,6 +162,50 @@ describe("GET /api/v1/versions/:txHash", () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/versions/not-a-tx-hash" });
     expect(res.statusCode).toBe(400);
   });
+
+  it("indexed version still 200s (serving indexed data only) when the chain lookup itself fails", async () => {
+    const db = openDb(":memory:");
+    seedFixtureDb(db);
+    const failingApp = buildServer({
+      db,
+      network: "devnet",
+      fetchProof: async () => {
+        throw new Error("RPC unreachable");
+      },
+      getTip: fakeGetTip(120n),
+      rateLimit: { max: 1000, timeWindow: "1 minute" },
+    });
+
+    const res = await failingApp.inject({
+      method: "GET",
+      url: `/api/v1/versions/${FIXTURE.alpha.v2TxHash}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.source).toBe("index");
+    expect(body.status).toBe("committed");
+    expect(body.manifest).toBeNull(); // chain lookup failed, so no manifest to decorate with
+  });
+
+  it("502s an unindexed tx hash when the chain lookup itself fails (nothing to fall back to)", async () => {
+    const db = openDb(":memory:");
+    seedFixtureDb(db);
+    const failingApp = buildServer({
+      db,
+      network: "devnet",
+      fetchProof: async () => {
+        throw new Error("RPC unreachable");
+      },
+      getTip: fakeGetTip(120n),
+      rateLimit: { max: 1000, timeWindow: "1 minute" },
+    });
+
+    const res = await failingApp.inject({
+      method: "GET",
+      url: `/api/v1/versions/${FIXTURE.unindexedTxHash}`,
+    });
+    expect(res.statusCode).toBe(502);
+  });
 });
 
 describe("GET /api/v1/hashes/:sha256", () => {

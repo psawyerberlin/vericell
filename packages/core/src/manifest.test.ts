@@ -70,6 +70,17 @@ describe("encodeManifest / decodeManifest", () => {
     expect(decoded).toEqual(baseManifest);
   });
 
+  it("round-trips a versioned, custodial manifest (genesis + prev + declared_author)", () => {
+    const versioned: Manifest = {
+      ...baseManifest,
+      genesis: TX_HASH,
+      prev: TX_HASH,
+      declared_author: "alice",
+    };
+    const decoded = decodeManifest(encodeManifest(versioned));
+    expect(decoded).toEqual(versioned);
+  });
+
   it("round-trips a compact manifest without files", () => {
     const compact: Manifest = {
       app: "vericell",
