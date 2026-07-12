@@ -1,15 +1,43 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ccc } from "@ckb-ccc/ccc";
 import { makeClient } from "./client.js";
 
+// makeClient reads these directly from process.env — an operator's own
+// shell exporting them (plausible: they're exactly what's needed to run
+// the offckb suites in this same package) would otherwise leak into the
+// "default URL" test below. Saved before each test and restored after,
+// rather than an unconditional delete, so a real ambient value survives
+// past this file's run.
+const ORIGINAL_DEVNET_RPC_URL = process.env.VERICELL_DEVNET_RPC_URL;
+const ORIGINAL_RPC_URL = process.env.VERICELL_RPC_URL;
+const ORIGINAL_DEVNET_SCRIPTS_FILE = process.env.VERICELL_DEVNET_SCRIPTS_FILE;
+
 describe("makeClient", () => {
-  afterEach(() => {
+  beforeEach(() => {
     delete process.env.VERICELL_DEVNET_RPC_URL;
     delete process.env.VERICELL_RPC_URL;
     delete process.env.VERICELL_DEVNET_SCRIPTS_FILE;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_DEVNET_RPC_URL === undefined) {
+      delete process.env.VERICELL_DEVNET_RPC_URL;
+    } else {
+      process.env.VERICELL_DEVNET_RPC_URL = ORIGINAL_DEVNET_RPC_URL;
+    }
+    if (ORIGINAL_RPC_URL === undefined) {
+      delete process.env.VERICELL_RPC_URL;
+    } else {
+      process.env.VERICELL_RPC_URL = ORIGINAL_RPC_URL;
+    }
+    if (ORIGINAL_DEVNET_SCRIPTS_FILE === undefined) {
+      delete process.env.VERICELL_DEVNET_SCRIPTS_FILE;
+    } else {
+      process.env.VERICELL_DEVNET_SCRIPTS_FILE = ORIGINAL_DEVNET_SCRIPTS_FILE;
+    }
   });
 
   it("builds a ClientPublicMainnet for mainnet", () => {

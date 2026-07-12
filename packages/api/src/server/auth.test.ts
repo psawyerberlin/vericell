@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyRequest } from "fastify";
 import { openDb } from "../db/open.js";
 import { hashApiKey, perKeyRateLimitOptions } from "./auth.js";
@@ -9,6 +9,24 @@ function fakeRequest(headers: Record<string, string> = {}, ip = "203.0.113.1"): 
 }
 
 describe("requireAdminToken", () => {
+  // buildServer falls back to `opts.adminToken ?? process.env.ADMIN_TOKEN`
+  // (build.ts) — passing `adminToken: undefined` below only exercises the
+  // "not configured" 500 branch if the operator's own shell doesn't already
+  // export ADMIN_TOKEN. Saved/cleared/restored around this test so it does.
+  const ORIGINAL_ADMIN_TOKEN = globalThis.process.env.ADMIN_TOKEN;
+
+  beforeEach(() => {
+    delete globalThis.process.env.ADMIN_TOKEN;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_ADMIN_TOKEN === undefined) {
+      delete globalThis.process.env.ADMIN_TOKEN;
+    } else {
+      globalThis.process.env.ADMIN_TOKEN = ORIGINAL_ADMIN_TOKEN;
+    }
+  });
+
   it("500s on POST /keys when ADMIN_TOKEN isn't configured on the server", async () => {
     const db = openDb(":memory:");
     const app = buildServer({
