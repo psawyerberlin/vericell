@@ -105,7 +105,17 @@ async function attemptDelivery(
       method: "POST",
       headers: { "content-type": "application/json", "X-VeriCell-Signature": signature },
       body: row.payload,
+      // The SSRF guard above only validates row.url's own host; a receiver
+      // that 30x-redirects the delivery could otherwise point the actual
+      // request at a private address without ever registering one. `fetch`
+      // follows redirects by default, so a 3xx here is treated as a failed
+      // delivery rather than transparently followed — a receiver that
+      // legitimately moved must be re-registered at its new URL.
+      redirect: "manual",
     });
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error(`receiver responded with a redirect (HTTP ${res.status}), not followed`);
+    }
     if (!res.ok) {
       throw new Error(`receiver responded with HTTP ${res.status}`);
     }

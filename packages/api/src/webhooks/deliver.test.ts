@@ -27,7 +27,10 @@ interface Receiver {
   close: () => Promise<void>;
 }
 
-function startReceiver(respond: (req: CapturedRequest, n: number) => number): Promise<Receiver> {
+function startReceiver(
+  respond: (req: CapturedRequest, n: number) => number,
+  extraHeaders?: (n: number) => Record<string, string>,
+): Promise<Receiver> {
   const requests: CapturedRequest[] = [];
   return new Promise((resolve) => {
     const server: Server = createServer((req: IncomingMessage, res) => {
@@ -40,7 +43,10 @@ function startReceiver(respond: (req: CapturedRequest, n: number) => number): Pr
         };
         requests.push(captured);
         const status = respond(captured, requests.length);
-        res.writeHead(status, { "content-type": "application/json" });
+        res.writeHead(status, {
+          "content-type": "application/json",
+          ...extraHeaders?.(requests.length),
+        });
         res.end(JSON.stringify({ received: true }));
       });
     });
@@ -270,6 +276,49 @@ describe("webhook delivery against a local HTTP receiver", () => {
     expect(row.last_error).toMatch(/500/);
     expect(warnings).toHaveLength(maxAttempts);
     expect(warnings.at(-1)?.msg).toMatch(/dead-lettered/);
+
+    db.close();
+    await receiver.close();
+  });
+
+  it("does not follow a redirect response (SSRF-via-redirect guard)", async () => {
+    // The redirect target is never actually requested — a receiver's own
+    // internal-network address would otherwise bypass the URL-registration-
+    // time SSRF check entirely, since `fetch` follows redirects by default.
+    const receiver = await startReceiver(
+      () => 302,
+      () => ({ location: "http://127.0.0.1:1/internal" }),
+    );
+    const secret = "whsec_redirect_secret";
+
+    const db = openDb(":memory:");
+    seedApiKey(db);
+    db.prepare(
+      `INSERT INTO webhooks (id, key_hash, unid, url, events, secret, created_at)
+       VALUES ('wh-redirect', 'key-hash', NULL, ?, 'committed', ?, ?)`,
+    ).run(`http://127.0.0.1:${receiver.port}/hook`, secret, new Date().toISOString());
+
+    const t0 = new Date("2026-01-01T00:00:00Z");
+    db.prepare(
+      `INSERT INTO webhook_deliveries (id, webhook_id, event, unid, tx_hash, payload, status, attempts, next_attempt_at, created_at)
+       VALUES ('d-redirect', 'wh-redirect', 'committed', 'p1', '0xabc', '{"event":"committed"}', 'pending', 0, ?, ?)`,
+    ).run(t0.toISOString(), t0.toISOString());
+
+    const warnings: { obj: unknown; msg?: string }[] = [];
+    const logger = {
+      info() {},
+      warn: (obj: unknown, msg?: string) => warnings.push({ obj, msg }),
+      error() {},
+    };
+
+    await deliverPendingWebhooks({ db, logger, now: () => t0 });
+
+    expect(receiver.requests).toHaveLength(1);
+    const row = db
+      .prepare("SELECT status, last_error FROM webhook_deliveries WHERE id = 'd-redirect'")
+      .get() as { status: string; last_error: string };
+    expect(row.status).toBe("pending");
+    expect(row.last_error).toMatch(/redirect/i);
 
     db.close();
     await receiver.close();
