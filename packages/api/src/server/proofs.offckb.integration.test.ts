@@ -14,6 +14,11 @@
  * the same funded devnet account as the non-custodial payer (only one is
  * available in this environment) — the two roles are still exercised
  * through entirely separate code paths (payer-signed vs. server-signed).
+ *
+ * The `Indexer` here (used only to flip pending -> committed after a
+ * broadcast) walks from `INDEXER_START_BLOCK` if set, else genesis — same
+ * env var and rationale as `indexer/offckb.integration.test.ts`, for a
+ * long-running local devnet.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
@@ -76,7 +81,8 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
       rateLimit: { max: 1000, timeWindow: "1 minute" },
     });
 
-    indexer = new Indexer({ db, client, startBlock: 0n });
+    const startBlock = BigInt(globalThis.process?.env?.INDEXER_START_BLOCK ?? 0);
+    indexer = new Indexer({ db, client, startBlock });
   }, 30000);
 
   async function manifestDraft(title: string, fileTag: string, extra?: Record<string, unknown>) {
@@ -148,7 +154,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     const projectRow = db.prepare("SELECT active, unid FROM projects WHERE unid = ?").get(unid) as
       { active: number; unid: string } | undefined;
     expect(projectRow?.active).toBe(1);
-  }, 90000);
+  }, 180000);
 
   it("idempotent replay: a repeated Idempotency-Key never double-broadcasts", async () => {
     const draft = await manifestDraft(`Phase5 Idem ${runTag}`, `${runTag}:idem`);
@@ -193,7 +199,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     expect(versionCount).toBe(1);
 
     await client.waitTransaction(first.json().tx_hash);
-  }, 60000);
+  }, 120000);
 
   it("custodial: anchor, new version, withdraw", async () => {
     const anchorRes = await app.inject({
@@ -243,5 +249,5 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
       .prepare("SELECT active, live_tx_hash FROM projects WHERE unid = ?")
       .get(anchorBody.unid) as { active: number; live_tx_hash: string | null } | undefined;
     expect(projectRow?.active).toBe(0);
-  }, 120000);
+  }, 240000);
 });

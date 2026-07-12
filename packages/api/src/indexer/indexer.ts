@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type Database from "better-sqlite3";
 import { ccc } from "@ckb-ccc/ccc";
+import { deliverPendingWebhooks } from "../webhooks/deliver.js";
 import { processBlock } from "./process.js";
 import { getSyncState, setSyncState, rollback } from "./reorg.js";
 import type { IndexerClient } from "./types.js";
@@ -27,6 +28,12 @@ export interface IndexerOptions {
   startBlock?: bigint;
   /** Fixed rollback depth on reorg detection (see reorg.ts). */
   reorgDepth?: bigint;
+  /** Injectable for webhook delivery tests — defaults to the global `fetch`. */
+  webhookFetch?: typeof fetch;
+  /** Injectable wall clock for deterministic webhook retry-backoff tests. */
+  now?: () => Date;
+  /** Total webhook delivery attempts before dead-lettering (see `webhooks/deliver.ts`). */
+  webhookMaxAttempts?: number;
 }
 
 /**
@@ -41,6 +48,9 @@ export class Indexer {
   private readonly pollIntervalMs: number;
   private readonly startBlock: bigint;
   private readonly reorgDepth: bigint;
+  private readonly webhookFetch?: typeof fetch;
+  private readonly now: () => Date;
+  private readonly webhookMaxAttempts?: number;
 
   private stopped = true;
   private loopPromise: Promise<void> | null = null;
@@ -59,6 +69,9 @@ export class Indexer {
     this.pollIntervalMs = opts.pollIntervalMs ?? 3000;
     this.startBlock = opts.startBlock ?? 0n;
     this.reorgDepth = opts.reorgDepth ?? 6n;
+    this.webhookFetch = opts.webhookFetch;
+    this.now = opts.now ?? (() => new Date());
+    this.webhookMaxAttempts = opts.webhookMaxAttempts;
   }
 
   /**
@@ -117,6 +130,18 @@ export class Indexer {
       state = { lastBlockNumber: next, lastBlockHash: block.header.hash };
       this.logger.info({ blockNumber: next.toString() }, "indexed block");
     }
+
+    // Dispatcher inside the indexer loop (ClaudeCodeInstruction.md Phase 6):
+    // runs every pollOnce(), whether or not new blocks were indexed this
+    // round, so a delivery's exponential-backoff retry becomes due and gets
+    // attempted again on a later poll even with no new chain activity.
+    await deliverPendingWebhooks({
+      db: this.db,
+      fetchImpl: this.webhookFetch,
+      logger: this.logger,
+      now: this.now,
+      maxAttempts: this.webhookMaxAttempts,
+    });
   }
 
   /** Start the poll loop in the background. Call `stop()` to shut down cleanly. */

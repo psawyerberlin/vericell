@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 import { ccc } from "@ckb-ccc/ccc";
 import type { Manifest } from "core";
+import { enqueueWebhookDeliveries } from "../webhooks/dispatch.js";
+import type { WebhookEventPayload } from "../webhooks/types.js";
 import { detectCandidates, type Candidate } from "./detect.js";
 
 interface VersionRow {
@@ -8,6 +10,13 @@ interface VersionRow {
   unid: string;
   version_no: number;
   status: string;
+  project_sha256: string;
+}
+
+function projectTitle(db: Database.Database, unid: string): string | null {
+  const row = db.prepare("SELECT title FROM projects WHERE unid = ?").get(unid) as
+    { title: string } | undefined;
+  return row?.title ?? null;
 }
 
 function ownerAddress(lock: ccc.ScriptLike, addressPrefix: string): string {
@@ -39,6 +48,15 @@ function upsertCandidate(
   const blockNumber = Number(header.number);
   const blockTime = new Date(Number(header.timestamp)).toISOString();
   const address = ownerAddress(lock, addressPrefix);
+
+  // Captured before the upsert below so a "committed" webhook event fires
+  // exactly once per version: the first time the indexer sees this tx (no
+  // prior row, or a Phase 5 `pending` placeholder), never on a re-index of
+  // an already-committed row.
+  const priorStatus = (
+    db.prepare("SELECT status FROM versions WHERE tx_hash = ?").get(txHash) as
+      Pick<VersionRow, "status"> | undefined
+  )?.status;
 
   db.prepare(
     `INSERT INTO projects (unid, title, source_url, ckb_address, created_at, active, live_tx_hash, live_index)
@@ -100,6 +118,20 @@ function upsertCandidate(
     }
   }
 
+  if (priorStatus !== "committed" && priorStatus !== "consumed") {
+    const payload: WebhookEventPayload = {
+      event: "committed",
+      unid,
+      tx_hash: txHash,
+      version_no: versionNo,
+      project_sha256: manifest.project_sha256,
+      title: manifest.title,
+      block_number: blockNumber,
+      block_time: blockTime,
+    };
+    enqueueWebhookDeliveries(db, "committed", unid, payload);
+  }
+
   return { unid };
 }
 
@@ -108,22 +140,51 @@ function markConsumed(
   prevTxHash: string,
   candidates: Candidate[],
   successorTxHash: string,
-  consumedAtBlock: number,
+  header: ccc.ClientBlockHeader,
 ): void {
   const prevRow = db
-    .prepare("SELECT tx_hash, unid, version_no, status FROM versions WHERE tx_hash = ?")
+    .prepare(
+      "SELECT tx_hash, unid, version_no, status, project_sha256 FROM versions WHERE tx_hash = ?",
+    )
     .get(prevTxHash) as VersionRow | undefined;
   if (!prevRow || prevRow.status === "consumed") return;
+
+  const consumedAtBlock = Number(header.number);
+  const blockTime = new Date(Number(header.timestamp)).toISOString();
 
   db.prepare(
     "UPDATE versions SET status = 'consumed', consumed_at_block = ? WHERE tx_hash = ?",
   ).run(consumedAtBlock, prevTxHash);
+
+  const title = projectTitle(db, prevRow.unid);
+  enqueueWebhookDeliveries(db, "consumed", prevRow.unid, {
+    event: "consumed",
+    unid: prevRow.unid,
+    tx_hash: prevTxHash,
+    version_no: prevRow.version_no,
+    project_sha256: prevRow.project_sha256,
+    title,
+    block_number: consumedAtBlock,
+    block_time: blockTime,
+  });
 
   const successor = candidates.find((c) => c.manifest.prev === prevTxHash);
   if (successor) {
     db.prepare(
       "UPDATE projects SET active = 1, live_tx_hash = ?, live_index = 0 WHERE unid = ?",
     ).run(successorTxHash, prevRow.unid);
+
+    enqueueWebhookDeliveries(db, "superseded", prevRow.unid, {
+      event: "superseded",
+      unid: prevRow.unid,
+      tx_hash: prevTxHash,
+      version_no: prevRow.version_no,
+      project_sha256: prevRow.project_sha256,
+      title,
+      block_number: consumedAtBlock,
+      block_time: blockTime,
+      successor_tx_hash: successorTxHash,
+    });
   } else {
     db.prepare("UPDATE projects SET active = 0, live_tx_hash = NULL WHERE unid = ?").run(
       prevRow.unid,
@@ -160,13 +221,7 @@ export function processBlock(
         // plain capacity funding by a *later*, unrelated anchor — not a
         // consumption of the proof cell itself.
         if (Number(input.previousOutput.index) !== 0) continue;
-        markConsumed(
-          db,
-          input.previousOutput.txHash,
-          candidates,
-          txHash,
-          Number(block.header.number),
-        );
+        markConsumed(db, input.previousOutput.txHash, candidates, txHash, block.header);
       }
     }
   });

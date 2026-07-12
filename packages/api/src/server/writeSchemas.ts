@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ManifestFileSchema } from "core";
+import { WEBHOOK_EVENTS } from "../webhooks/types.js";
 
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const CODE_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -71,4 +72,15 @@ export const CustodialAnchorBodySchema = z.object({
 export const CreateKeyBodySchema = z.object({
   label: z.string().min(1).max(200).optional(),
   rate_limit: z.number().int().min(1).max(10_000).optional(),
+});
+
+/** TECHNICAL.md §7.3: `{ url, events, unid? }` — `unid` omitted means "every project of this key". */
+export const RegisterWebhookBodySchema = z.object({
+  url: z.string().url(),
+  events: z.array(z.enum(WEBHOOK_EVENTS)).min(1),
+  unid: z.string().min(1).optional(),
+});
+
+export const WebhookIdParams = z.object({
+  id: z.string().min(1),
 });

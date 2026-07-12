@@ -13,6 +13,15 @@
  * own anchored transactions (a random tag distinguishes them) rather than
  * global table counts, since a long-lived local devnet accumulates cells
  * from earlier test runs (this suite's and `chain`'s).
+ *
+ * `pollOnce()` here walks every block from its `startBlock` to tip (see
+ * `indexer/process.ts`'s DECISIONS.md entry on the full-chain scan). On a
+ * devnet instance that has been running and accumulating blocks for a
+ * while, indexing from genesis (the default `startBlock: 0n`) can take
+ * longer than a short test timeout — set `INDEXER_START_BLOCK` (same env
+ * var `indexer/run.ts` reads for testnet/mainnet) to skip straight to a
+ * recent height on such a devnet; the timeout below is also generous enough
+ * to cover a genesis walk on a moderately-aged local devnet without it.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { ccc } from "@ckb-ccc/ccc";
@@ -113,8 +122,9 @@ describe.skipIf(!OFFCKB_ENABLED)("indexer against offckb devnet", () => {
     const p3v2TxHash = await signer.sendTransaction(p3v2Tx);
     await client.waitTransaction(p3v2TxHash);
 
+    const startBlock = BigInt(globalThis.process?.env?.INDEXER_START_BLOCK ?? 0);
     const db = openDb(":memory:");
-    const indexer = new Indexer({ db, client, startBlock: 0n });
+    const indexer = new Indexer({ db, client, startBlock });
     await indexer.pollOnce();
 
     const project1 = db.prepare("SELECT * FROM projects WHERE unid = ?").get(p1TxHash) as
@@ -160,5 +170,5 @@ describe.skipIf(!OFFCKB_ENABLED)("indexer against offckb devnet", () => {
     expect(hashRows[0]!.path).toBe("file.txt");
 
     db.close();
-  }, 90000);
+  }, 300000);
 });

@@ -44,5 +44,16 @@ export {
   type GetChainClientFn,
   type GetCustodialSignerFn,
 } from "./server/chainClient.js";
-
-// Phase 6+ fills this in further: webhooks.
+export { WEBHOOK_EVENTS, type WebhookEvent, type WebhookEventPayload } from "./webhooks/types.js";
+export { enqueueWebhookDeliveries } from "./webhooks/dispatch.js";
+export {
+  deliverPendingWebhooks,
+  signPayload,
+  type DeliverPendingWebhooksOptions,
+} from "./webhooks/deliver.js";
+export {
+  assertPublicWebhookUrl,
+  webhookPrivateNetworksAllowed,
+  isPrivateIpv4,
+  isPrivateIpv6,
+} from "./webhooks/guard.js";

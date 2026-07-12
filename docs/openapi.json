@@ -584,6 +584,80 @@
           }
         }
       }
+    },
+    "/api/v1/webhooks": {
+      "post": {
+        "summary": "Register a webhook for committed/consumed/superseded events",
+        "tags": [
+          "webhooks"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "committed",
+                        "consumed",
+                        "superseded"
+                      ]
+                    },
+                    "minItems": 1
+                  },
+                  "unid": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "url",
+                  "events"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/{id}": {
+      "delete": {
+        "summary": "Remove a webhook (only the API key that registered it may delete it)",
+        "tags": [
+          "webhooks"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
     }
   },
   "tags": [
@@ -602,6 +676,18 @@
     {
       "name": "meta",
       "description": "Service health and statistics"
+    },
+    {
+      "name": "proofs",
+      "description": "Authenticated anchoring (non-custodial and custodial)"
+    },
+    {
+      "name": "keys",
+      "description": "API key management"
+    },
+    {
+      "name": "webhooks",
+      "description": "Event delivery for committed/consumed/superseded"
     }
   ]
 }

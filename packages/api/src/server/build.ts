@@ -43,6 +43,7 @@ import { registerProofRoutes } from "./routes/proofs.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerVerifyRoutes } from "./routes/verify.js";
 import { registerVersionRoutes } from "./routes/versions.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import "./types.js";
 
 export type TypedApp = FastifyInstance<
@@ -189,6 +190,9 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
         { name: "versions", description: "Individual on-chain proof versions" },
         { name: "hashes", description: "Backward hash search and verification" },
         { name: "meta", description: "Service health and statistics" },
+        { name: "proofs", description: "Authenticated anchoring (non-custodial and custodial)" },
+        { name: "keys", description: "API key management" },
+        { name: "webhooks", description: "Event delivery for committed/consumed/superseded" },
       ],
     },
     transform: jsonSchemaTransform,
@@ -226,6 +230,7 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
         ...perKeyRateLimitOptions(opts.db),
       });
       registerProofRoutes(writeScope);
+      registerWebhookRoutes(writeScope);
     });
   });
 
