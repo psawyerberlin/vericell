@@ -1,0 +1,114 @@
+# VeriCell production/staging stack — see docs/DEPLOY.md for the full runbook.
+#
+# Topology (Phase 10a made the API dual-network, which supersedes the older
+# "one profile per network" idea from ClaudeCodeInstruction.md's original
+# Phase 10 brief — see docs/DECISIONS.md, Phase 10c): one `api` container
+# serves BOTH testnet and mainnet at once (/api/v1/testnet/..., /api/v1/mainnet/...,
+# plus a bare /api/v1/... alias for whichever network VERICELL_NETWORK names).
+# The indexer is single-network per process, so it gets one container per
+# network instead. Going from local HTTP testing to the live site at
+# vericell.net is purely a .env change (CADDY_DOMAIN, VITE_API_URL) — no
+# code or compose edits, per the network-flag rule in ClaudeCodeInstruction.md.
+#
+# Quickstart:
+#   cp .env.example .env   # then fill it in — see docs/DEPLOY.md
+#   docker compose up -d --build
+#   curl http://localhost/api/v1/testnet/health   # or your domain, over https
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+      args:
+        VITE_VERICELL_NETWORK: ${VITE_VERICELL_NETWORK:-mainnet}
+        VITE_API_URL: ${VITE_API_URL:?Set VITE_API_URL to the public site origin (e.g. https://vericell.net) before building}
+        VITE_VERICELL_FEE_ADDRESS_TESTNET: ${VITE_VERICELL_FEE_ADDRESS_TESTNET:-}
+        VITE_VERICELL_FEE_ADDRESS_MAINNET: ${VITE_VERICELL_FEE_ADDRESS_MAINNET:-}
+    environment:
+      # A real hostname here gets Caddy's automatic HTTPS; ":80" serves
+      # plain HTTP only, e.g. for local testing without a domain.
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-vericell.net}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data # ACME account + certificates, persisted across restarts
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    command: ["node", "dist/server/run.js"]
+    environment:
+      # Whichever network this names gets the bare /api/v1/... alias; both
+      # testnet and mainnet route trees are mounted either way.
+      VERICELL_NETWORK: ${VERICELL_NETWORK:-mainnet}
+      MAINNET_CONFIRM: ${MAINNET_CONFIRM:-}
+      # Public RPC by default (unset) — see docs/DEPLOY.md for why a
+      # self-hosted node override here applies to both networks at once.
+      VERICELL_RPC_URL: ${VERICELL_RPC_URL:-}
+      DB_DIR: /data
+      PORT: "3000"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN before starting the stack}
+      CUSTODIAL_ENABLED: ${CUSTODIAL_ENABLED:-}
+      SERVICE_PRIVATE_KEY: ${SERVICE_PRIVATE_KEY:-}
+      WEBHOOK_ALLOW_PRIVATE_NETWORKS: ${WEBHOOK_ALLOW_PRIVATE_NETWORKS:-}
+      VERICELL_FEE_ADDRESS_TESTNET: ${VERICELL_FEE_ADDRESS_TESTNET:-}
+      VERICELL_FEE_ADDRESS_MAINNET: ${VERICELL_FEE_ADDRESS_MAINNET:-}
+    volumes:
+      - sqlite-data:/data
+    restart: unless-stopped
+    logging: *default-logging
+
+  indexer-testnet:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    command: ["node", "dist/indexer/run.js"]
+    environment:
+      VERICELL_NETWORK: testnet
+      VERICELL_RPC_URL: ${VERICELL_RPC_URL:-}
+      DB_DIR: /data
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-3000}
+      INDEXER_START_BLOCK: ${INDEXER_START_BLOCK_TESTNET:-0}
+    volumes:
+      - sqlite-data:/data
+    restart: unless-stopped
+    logging: *default-logging
+
+  indexer-mainnet:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    command: ["node", "dist/indexer/run.js"]
+    environment:
+      VERICELL_NETWORK: mainnet
+      MAINNET_CONFIRM: ${MAINNET_CONFIRM:-}
+      VERICELL_RPC_URL: ${VERICELL_RPC_URL:-}
+      DB_DIR: /data
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-3000}
+      INDEXER_START_BLOCK: ${INDEXER_START_BLOCK_MAINNET:-0}
+    volumes:
+      - sqlite-data:/data
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  sqlite-data:
+  caddy-data:
+  caddy-config:

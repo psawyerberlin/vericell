@@ -1,0 +1,29 @@
+# VeriCell reverse proxy + static file server.
+#
+# {$CADDY_DOMAIN} is the one line that differs between environments:
+#   - a real hostname (e.g. "vericell.net") -> Caddy provisions and renews a
+#     Let's Encrypt certificate automatically and redirects :80 -> :443.
+#   - ":80" -> plain HTTP on port 80, no ACME involved at all (Caddy treats
+#     ":80"/":443" addresses as explicitly insecure and never attempts TLS on
+#     them) — used for local/staging testing without owning the domain.
+# Set via the CADDY_DOMAIN environment variable (docker-compose.yml), not
+# baked into this file, so switching is a config change, not a rebuild.
+{$CADDY_DOMAIN} {
+	encode zstd gzip
+
+	# Fastify already serves everything under /api/v1/... — `handle` (not
+	# `handle_path`) forwards the request path unchanged, so the api
+	# service sees the same /api/v1/... paths it registers routes for.
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		root * /srv/web
+		# The legal pages (impressum.html, datenschutz.html,
+		# haftungsausschluss.html) are separate Vite entries and resolve
+		# directly; anything else falls back to the SPA's index.html.
+		try_files {path} /index.html
+		file_server
+	}
+}
