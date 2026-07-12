@@ -14,6 +14,21 @@ export {
   LEGACY_DATA_PREFIX,
 } from "./collectors.js";
 export { buildWithdrawTx, type BuildWithdrawTxParams } from "./withdraw.js";
+export {
+  feeLockFor,
+  pickFeeCell,
+  applyServiceFee,
+  verifyServiceFeePaid,
+  isFeeCellContentionError,
+  withFeeCellRetry,
+  buildCreateFeeCellsTx,
+  buildSweepFeeCellsTx,
+  type FeeApplication,
+  type FeeVerification,
+  type BuildCreateFeeCellsTxParams,
+  type BuildSweepFeeCellsTxParams,
+  type SweepFeeCellsResult,
+} from "./fee.js";
 export { PURE_CAPACITY_FILTER } from "./filters.js";
 export { DEFAULT_FEE_RATE } from "./constants.js";
 // Exported (Phase 5) so `api`'s route-level unit tests can exercise

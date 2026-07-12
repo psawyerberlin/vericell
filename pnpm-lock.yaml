@@ -138,6 +138,18 @@ importers:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@22.7.5)(yaml@2.9.0)
 
+  scripts:
+    dependencies:
+      chain:
+        specifier: workspace:*
+        version: link:../packages/chain
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
+      core:
+        specifier: workspace:*
+        version: link:../packages/core
+
 packages:
 
   '@adraffy/ens-normalize@1.11.1':

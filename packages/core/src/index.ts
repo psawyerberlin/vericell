@@ -23,3 +23,13 @@ export {
   explorerUrlForNetwork,
   type Network,
 } from "./network.js";
+export {
+  FEE_WAIVER_CKB,
+  FEE_WAIVER_SHANNONS,
+  FEE_EXPLAINER_TEXT,
+  computeFee,
+  getFeeAddress,
+  isFeeConfigured,
+  costBreakdown,
+  type CostBreakdown,
+} from "./fee.js";

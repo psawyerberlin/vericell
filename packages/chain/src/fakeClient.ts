@@ -81,14 +81,23 @@ export class FakeClient extends ccc.Client {
         cellDeps: [],
       });
     }
-    if (script === ccc.KnownScript.NervosDao || script === ccc.KnownScript.AnyoneCanPay) {
-      // Never matched by any fixture cell — completeInputsByCapacity (DAO)
-      // and SignerCkbPublicKey.getRelatedScripts (AnyoneCanPay) both resolve
+    if (script === ccc.KnownScript.NervosDao) {
+      // Never matched by any fixture cell — completeInputsByCapacity resolves
       // this unconditionally on every call, just to compare code hashes
       // against the tx's actual input locks. This only needs to resolve to
       // *some* script that isn't one of our test cells' type.
       return ccc.ScriptInfo.from({
         codeHash: "0x" + "00".repeat(32),
+        hashType: "type",
+        cellDeps: [],
+      });
+    }
+    if (script === ccc.KnownScript.AnyoneCanPay) {
+      // Real devnet ACP code hash (from `offckb system-scripts`) — fee tests
+      // create fixture cells under this exact lock so `findCellsByLock`
+      // actually matches them, unlike the other fixtures above.
+      return ccc.ScriptInfo.from({
+        codeHash: "0xe09352af0066f3162287763ce4ddba9af6bfaeab198dc7ab37f8c71c9e68bb5b",
         hashType: "type",
         cellDeps: [],
       });

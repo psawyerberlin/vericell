@@ -18,6 +18,10 @@ import {
   estimateCellCost,
   NETWORK,
   explorerUrlForNetwork,
+  computeFee,
+  getFeeAddress,
+  costBreakdown,
+  FEE_EXPLAINER_TEXT,
 } from "core";
 
 /* ================================================================== */
@@ -170,6 +174,7 @@ const state = {
   address: null,
   entries: [], // [{ p: path, h: sha256hex, bytes }]
   pendingPrev: null, // set while the create panel is in "publish new version" mode
+  lastCostEstimate: null, // { full, compact } CKB, cached from renderManifest() for the submit-time cost gate
 };
 state.client = makeChainClient(state.network);
 
@@ -236,6 +241,82 @@ async function connectWallet() {
 }
 
 /* ================================================================== */
+/* Service fee — ACP top-up (phase(fee))                              */
+/*                                                                     */
+/* `web` depends only on `core` + `@ckb-ccc/ccc`, not `chain` (which    */
+/* imports node:fs for devnet's system-scripts file and doesn't bundle */
+/* cleanly for a browser target — same reason anchorProof/withdrawProof */
+/* already hand-build their transactions instead of calling `chain`'s   */
+/* builders). This mirrors chain/src/fee.ts's applyServiceFee exactly,  */
+/* against the same VERICELL_FEE_ADDRESS_<NETWORK> config (read here    */
+/* via its VITE_-prefixed build-time form, core's getFeeAddress).       */
+/* ================================================================== */
+async function feeLockForWeb(client, network) {
+  const address = getFeeAddress(network);
+  if (!address) return null;
+  const addr = await ccc.Address.fromString(address, client);
+  const acpInfo = await client.getKnownScript(ccc.KnownScript.AnyoneCanPay);
+  return ccc.Script.from({
+    codeHash: acpInfo.codeHash,
+    hashType: acpInfo.hashType,
+    args: addr.script.args,
+  });
+}
+
+async function pickFeeCellWeb(client, feeLock) {
+  const candidates = [];
+  for await (const cell of client.findCellsByLock(feeLock, null, true)) {
+    candidates.push(cell);
+    if (candidates.length >= 5) break;
+  }
+  if (candidates.length === 0) {
+    throw new Error(
+      "No fee-collection cell found for this network yet — the service fee pool hasn't been set up.",
+    );
+  }
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+/** Appends the service-fee ACP top-up leg to `tx` in place, if one is due — see chain/src/fee.ts's applyServiceFee. */
+async function applyServiceFeeWeb(client, tx, network) {
+  const output0 = tx.outputs[0];
+  const amount = computeFee(output0.capacity);
+  if (amount === 0n) return { amount: 0n };
+
+  const feeLock = await feeLockForWeb(client, network);
+  if (!feeLock) return { amount: 0n };
+
+  const cell = await pickFeeCellWeb(client, feeLock);
+  const acpInfo = await client.getKnownScript(ccc.KnownScript.AnyoneCanPay);
+  await tx.addCellDepInfos(client, acpInfo.cellDeps);
+  tx.addInput({ previousOutput: cell.outPoint });
+  tx.addOutput({ lock: cell.cellOutput.lock, capacity: cell.cellOutput.capacity + amount }, "0x");
+  return { amount, cell };
+}
+
+/** shannons, formatted as a CKB amount. */
+function formatShannons(shannons) {
+  const ckb = shannons / 100_000_000n;
+  const rem = shannons % 100_000_000n;
+  if (rem === 0n) return `${ckb} CKB`;
+  const fraction = rem.toString().padStart(8, "0").replace(/0+$/, "");
+  return `${ckb}.${fraction} CKB`;
+}
+
+/** The full "what this anchor costs" breakdown text — shown before the wallet-confirm step whenever a real service fee applies. */
+function costBreakdownText(cost) {
+  const feeLine =
+    cost.feeConfigured && cost.serviceFeeShannons > 0n
+      ? `Service fee: ${formatShannons(cost.serviceFeeShannons)}`
+      : "Service fee: none";
+  return (
+    `Locked capacity: ${formatShannons(cost.lockedCapacityShannons)} (refundable)\n` +
+    `Network fee: a small amount set by your wallet\n` +
+    `${feeLine}\n\n${FEE_EXPLAINER_TEXT}`
+  );
+}
+
+/* ================================================================== */
 /* Manifest & on-chain anchoring                                      */
 /* ================================================================== */
 function buildManifest({ compact, title, url, projHash, root, prev, genesis }) {
@@ -284,6 +365,9 @@ async function anchorProof({ compact, prevOutPoint, genesis, prevTxHash }) {
     outputs: [{ lock }], // capacity auto-set to the minimum for the data
     outputsData: [data],
   });
+  // Must run before completeInputsByCapacity so the wallet's own inputs are
+  // collected to cover the service fee amount too, not just the proof cell.
+  await applyServiceFeeWeb(state.client, tx, state.network);
   await tx.completeInputsByCapacity(state.signer);
   await tx.completeFeeBy(state.signer, 1000);
   const txHash = await state.signer.sendTransaction(tx);
@@ -621,9 +705,28 @@ async function renderManifest() {
       root: ph,
     });
     const cost = estimateCellCost(manifest);
-    document.getElementById("fullCost").textContent = `≈ ${cost.full} CKB locked (refundable)`;
-    document.getElementById("rootCost").textContent = `≈ ${cost.compact} CKB locked (refundable)`;
+    state.lastCostEstimate = cost;
+    document.getElementById("fullCost").textContent =
+      `≈ ${cost.full} CKB locked (refundable)${feeHint(cost.full)}`;
+    document.getElementById("rootCost").textContent =
+      `≈ ${cost.compact} CKB locked (refundable)${feeHint(cost.compact)}`;
+  } else {
+    state.lastCostEstimate = null;
   }
+}
+
+/** " · service fee ≈ X CKB" appended next to a storage-mode's capacity estimate, or "" when none applies. */
+function feeHint(capacityCkb) {
+  const cost = costBreakdown(BigInt(capacityCkb) * 100_000_000n, state.network);
+  if (!cost.feeConfigured || cost.serviceFeeShannons === 0n) return "";
+  return ` · service fee ≈ ${formatShannons(cost.serviceFeeShannons)}`;
+}
+
+/** Full cost breakdown for whichever storage mode is currently selected, from the cached estimate (`renderManifest`). */
+function currentCostBreakdown(compact) {
+  const est = state.lastCostEstimate;
+  const capacityCkb = est ? (compact ? est.compact : est.full) : 0;
+  return costBreakdown(BigInt(capacityCkb) * 100_000_000n, state.network);
 }
 
 function renderResults(records, apiDown = false, matchedHash = null) {
@@ -1204,18 +1307,27 @@ function init() {
     setStatus("submitStatus", "");
   };
 
-  // anchor — first anchors go straight to the wallet; publishing a new
-  // version (consuming the live cell) gets one extra inline confirm step.
+  // anchor — a plain first anchor with no service fee due goes straight to
+  // the wallet; publishing a new version, or any anchor a real service fee
+  // applies to, gets one extra inline confirm step showing what it costs.
   document.getElementById("submitBtn").onclick = () => {
     const prev = state.pendingPrev;
-    if (!prev) {
+    const compact = document.querySelector('input[name="storemode"]:checked').value === "root";
+    const cost = currentCostBreakdown(compact);
+    const feeDue = cost.feeConfigured && cost.serviceFeeShannons > 0n;
+
+    if (!prev && !feeDue) {
       doAnchor();
       return;
     }
+
+    const versionText = prev
+      ? `This will consume ${typeof prev.versionNo === "number" ? `v${prev.versionNo}` : "the current version"} ` +
+        `(tx ${prev.rec.txHash.slice(0, 14)}…) and create the next version. The old version remains ` +
+        `permanently verifiable as superseded; its locked CKB returns to your wallet.\n\n`
+      : "";
     document.getElementById("anchorConfirmText").textContent =
-      `This will consume ${typeof prev.versionNo === "number" ? `v${prev.versionNo}` : "the current version"} ` +
-      `(tx ${prev.rec.txHash.slice(0, 14)}…) and create the next version. The old version remains ` +
-      `permanently verifiable as superseded; its locked CKB returns to your wallet.`;
+      versionText + costBreakdownText(cost);
     document.getElementById("anchorConfirm").hidden = false;
   };
   document.getElementById("anchorConfirmYes").onclick = () => {

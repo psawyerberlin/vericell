@@ -1,5 +1,7 @@
 import { ccc } from "@ckb-ccc/ccc";
+import { NETWORK, type Network } from "core";
 import { DEFAULT_FEE_RATE } from "./constants.js";
+import { applyServiceFee } from "./fee.js";
 import { PURE_CAPACITY_FILTER } from "./filters.js";
 import { reserveSighashWitness } from "./witness.js";
 
@@ -10,6 +12,8 @@ export interface BuildAnchorTxParams {
   /** Out point of the previous version's cell, if this anchors a new version. */
   prevOutPoint?: ccc.OutPointLike;
   feeRate?: ccc.NumLike;
+  /** Network the service fee is looked up against (`VERICELL_FEE_ADDRESS_<NETWORK>`). Defaults to `core`'s `NETWORK`. */
+  network?: Network;
 }
 
 /**
@@ -25,7 +29,7 @@ export interface BuildAnchorTxParams {
  * `/proofs/prepare` flow).
  */
 export async function buildAnchorTx(params: BuildAnchorTxParams): Promise<ccc.Transaction> {
-  const { client, lock, manifestBytes, prevOutPoint, feeRate } = params;
+  const { client, lock, manifestBytes, prevOutPoint, feeRate, network = NETWORK } = params;
 
   const tx = ccc.Transaction.from({
     inputs: prevOutPoint ? [{ previousOutput: prevOutPoint }] : [],
@@ -34,6 +38,9 @@ export async function buildAnchorTx(params: BuildAnchorTxParams): Promise<ccc.Tr
   });
 
   const signer = new ccc.SignerCkbScriptReadonly(client, lock);
+  // Must run before completeInputsByCapacity so the payer's own inputs are
+  // collected to cover the service fee amount too, not just the proof cell.
+  await applyServiceFee(client, tx, network);
   await tx.completeInputsByCapacity(signer, undefined, PURE_CAPACITY_FILTER);
   await reserveSighashWitness(tx, lock, client);
   await tx.completeFeeBy(signer, feeRate ?? DEFAULT_FEE_RATE);
@@ -53,6 +60,8 @@ export interface BuildAnchorTxWithTypeIdParams {
   prevOutPoint?: ccc.OutPointLike;
   prevTypeScript?: ccc.ScriptLike;
   feeRate?: ccc.NumLike;
+  /** Network the service fee is looked up against (`VERICELL_FEE_ADDRESS_<NETWORK>`). Defaults to `core`'s `NETWORK`. */
+  network?: Network;
 }
 
 export interface AnchorTxWithTypeId {
@@ -76,7 +85,15 @@ export interface AnchorTxWithTypeId {
 export async function buildAnchorTxWithTypeId(
   params: BuildAnchorTxWithTypeIdParams,
 ): Promise<AnchorTxWithTypeId> {
-  const { client, lock, manifestBytes, prevOutPoint, prevTypeScript, feeRate } = params;
+  const {
+    client,
+    lock,
+    manifestBytes,
+    prevOutPoint,
+    prevTypeScript,
+    feeRate,
+    network = NETWORK,
+  } = params;
 
   if (prevOutPoint && !prevTypeScript) {
     throw new Error("buildAnchorTxWithTypeId: prevTypeScript is required when prevOutPoint is set");
@@ -105,6 +122,9 @@ export async function buildAnchorTxWithTypeId(
     tx.addOutput({ lock, type: ccc.Script.from({ ...typeIdInfo, args: typeId }) }, manifestBytes);
   }
 
+  // Must run before completeInputsByCapacity so the payer's own inputs are
+  // collected to cover the service fee amount too, not just the proof cell.
+  await applyServiceFee(client, tx, network);
   await tx.completeInputsByCapacity(signer, undefined, PURE_CAPACITY_FILTER);
   await reserveSighashWitness(tx, lock, client);
   await tx.completeFeeBy(signer, feeRate ?? DEFAULT_FEE_RATE);

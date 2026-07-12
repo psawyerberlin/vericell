@@ -1,11 +1,25 @@
-import { buildAnchorTx, buildAnchorTxWithTypeId, buildWithdrawTx, ccc } from "chain";
-import { decodeManifest, type Manifest } from "core";
+import {
+  buildAnchorTx,
+  buildAnchorTxWithTypeId,
+  buildWithdrawTx,
+  ccc,
+  verifyServiceFeePaid,
+  withFeeCellRetry,
+} from "chain";
+import {
+  costBreakdown,
+  decodeManifest,
+  type CostBreakdown,
+  type Manifest,
+  type Network,
+} from "core";
 import { requireApiKey } from "../auth.js";
 import {
   BadGatewayError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  PaymentRequiredError,
   ProblemError,
 } from "../errors.js";
 import { withIdempotency } from "../idempotency.js";
@@ -85,6 +99,7 @@ async function buildAnchor(
   client: ccc.Client,
   lock: ccc.ScriptLike,
   bytes: Uint8Array,
+  network: Network,
   prev?: { prevOutPoint: ccc.OutPointLike; prevTypeScript?: ccc.ScriptLike },
 ): Promise<ccc.Transaction> {
   if (prev?.prevTypeScript) {
@@ -95,14 +110,45 @@ async function buildAnchor(
         manifestBytes: bytes,
         prevOutPoint: prev.prevOutPoint,
         prevTypeScript: prev.prevTypeScript,
+        network,
       })
     ).tx;
   }
   if (prev) {
-    return buildAnchorTx({ client, lock, manifestBytes: bytes, prevOutPoint: prev.prevOutPoint });
+    return buildAnchorTx({
+      client,
+      lock,
+      manifestBytes: bytes,
+      prevOutPoint: prev.prevOutPoint,
+      network,
+    });
   }
   // Brand-new project: Type ID by default (TECHNICAL.md §5, "Production").
-  return (await buildAnchorTxWithTypeId({ client, lock, manifestBytes: bytes })).tx;
+  return (await buildAnchorTxWithTypeId({ client, lock, manifestBytes: bytes, network })).tx;
+}
+
+interface CostBreakdownBody {
+  locked_capacity: string;
+  network_fee: string;
+  service_fee: string;
+  fee_configured: boolean;
+}
+
+/** Shared `/proofs/*` response field: what this anchor actually costs, mirrored by the CLI/web pre-confirm summary (`core.costBreakdown`). */
+async function costBreakdownBody(
+  client: ccc.Client,
+  tx: ccc.Transaction,
+  network: Network,
+): Promise<CostBreakdownBody> {
+  const capacity = tx.outputs[0]?.capacity ?? 0n;
+  const cost: CostBreakdown = costBreakdown(capacity, network);
+  const networkFee = await tx.getFee(client);
+  return {
+    locked_capacity: cost.lockedCapacityShannons.toString(),
+    network_fee: networkFee.toString(),
+    service_fee: cost.serviceFeeShannons.toString(),
+    fee_configured: cost.feeConfigured,
+  };
 }
 
 function deriveUnid(output0: ccc.CellOutput, manifest: Manifest, txHash: string): string {
@@ -136,7 +182,7 @@ export function registerProofRoutes(app: TypedApp): void {
         );
         const bytes = manifestBytes(manifest);
 
-        const tx = await buildAnchor(client, lock, bytes, prev);
+        const tx = await buildAnchor(client, lock, bytes, app.network, prev);
         const capacity = tx.outputs[0]!.capacity;
 
         return {
@@ -146,6 +192,7 @@ export function registerProofRoutes(app: TypedApp): void {
             capacity: capacity.toString(),
             project_sha256: manifest.project_sha256,
             manifest,
+            cost: await costBreakdownBody(client, tx, app.network),
           },
         };
       });
@@ -185,6 +232,16 @@ export function registerProofRoutes(app: TypedApp): void {
         }
 
         const client = app.getChainClient();
+
+        const feeCheck = await verifyServiceFeePaid(client, tx, app.network);
+        if (!feeCheck.ok) {
+          throw new PaymentRequiredError(
+            `Service fee not paid: this anchor's locked capacity requires ${feeCheck.due} shannons ` +
+              `to the configured fee address, but the transaction only pays it ${feeCheck.paid} — ` +
+              `the fee leg from /proofs/prepare must not be removed or altered before signing.`,
+          );
+        }
+
         let txHash: string;
         try {
           txHash = await client.sendTransaction(tx);
@@ -229,9 +286,15 @@ export function registerProofRoutes(app: TypedApp): void {
 
         const manifest = await buildFullManifest(req.body.manifest as ManifestDraft);
         const bytes = manifestBytes(manifest);
-        const tx = await buildAnchor(client, lock, bytes);
 
-        const txHash = await signer.sendTransaction(tx);
+        // Rebuilds the whole transaction (picking a fresh pool cell each
+        // time) on fee-cell contention — see chain's withFeeCellRetry.
+        const { tx, txHash } = await withFeeCellRetry(async () => {
+          const builtTx = await buildAnchor(client, lock, bytes, app.network);
+          const sentTxHash = await signer.sendTransaction(builtTx);
+          return { tx: builtTx, txHash: sentTxHash };
+        });
+
         const output0 = tx.outputs[0]!;
         const unid = deriveUnid(output0, manifest, txHash);
         insertPendingVersion(app.db, {
@@ -243,7 +306,12 @@ export function registerProofRoutes(app: TypedApp): void {
 
         return {
           status: 202,
-          body: { tx_hash: txHash, unid, note: CUSTODIAL_TRADEOFF_NOTE },
+          body: {
+            tx_hash: txHash,
+            unid,
+            note: CUSTODIAL_TRADEOFF_NOTE,
+            cost: await costBreakdownBody(client, tx, app.network),
+          },
         };
       });
     },
@@ -293,12 +361,16 @@ export function registerProofRoutes(app: TypedApp): void {
           prev: project.live_tx_hash,
         });
         const bytes = manifestBytes(manifest);
-        const tx = await buildAnchor(client, serviceLock, bytes, {
-          prevOutPoint: prevCell.outPoint,
-          prevTypeScript: prevCell.cellOutput.type ?? undefined,
+
+        const { tx, txHash } = await withFeeCellRetry(async () => {
+          const builtTx = await buildAnchor(client, serviceLock, bytes, app.network, {
+            prevOutPoint: prevCell.outPoint,
+            prevTypeScript: prevCell.cellOutput.type ?? undefined,
+          });
+          const sentTxHash = await signer.sendTransaction(builtTx);
+          return { tx: builtTx, txHash: sentTxHash };
         });
 
-        const txHash = await signer.sendTransaction(tx);
         insertPendingVersion(app.db, {
           txHash,
           unid,
@@ -306,7 +378,15 @@ export function registerProofRoutes(app: TypedApp): void {
           ownerAddress: ownerAddressOf(serviceLock, client.addressPrefix),
         });
 
-        return { status: 202, body: { tx_hash: txHash, unid, note: CUSTODIAL_TRADEOFF_NOTE } };
+        return {
+          status: 202,
+          body: {
+            tx_hash: txHash,
+            unid,
+            note: CUSTODIAL_TRADEOFF_NOTE,
+            cost: await costBreakdownBody(client, tx, app.network),
+          },
+        };
       });
     },
   );

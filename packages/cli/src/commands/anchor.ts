@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { ccc, makeClient } from "chain";
-import { ManifestSchema, type Manifest } from "core";
+import { ccc, isFeeCellContentionError, makeClient } from "chain";
+import { FEE_EXPLAINER_TEXT, ManifestSchema, type Manifest } from "core";
 import { ApiClient, ApiRequestError } from "../lib/apiClient.js";
 import { CliError } from "../lib/cliError.js";
 import { toManifestDraft } from "../lib/manifestDraft.js";
@@ -17,21 +17,55 @@ export interface AnchorOptions {
   json?: boolean;
 }
 
+interface CostBreakdown {
+  locked_capacity: string;
+  network_fee: string;
+  service_fee: string;
+  fee_configured: boolean;
+}
+
 interface PrepareResponse {
   tx: unknown;
   capacity: string;
   project_sha256: string;
+  cost?: CostBreakdown;
 }
 
 interface SubmitResponse {
   tx_hash: string;
   unid: string;
+  cost?: CostBreakdown;
 }
 
 interface CustodialAnchorResponse {
   tx_hash: string;
   unid: string;
   note?: string;
+  cost?: CostBreakdown;
+}
+
+/** shannons, formatted as a CKB amount (trims a whole-CKB fee/capacity to an integer). */
+function formatShannons(shannons: string): string {
+  const value = BigInt(shannons);
+  const ckb = value / 100_000_000n;
+  const rem = value % 100_000_000n;
+  if (rem === 0n) return `${ckb} CKB`;
+  const fraction = rem.toString().padStart(8, "0").replace(/0+$/, "");
+  return `${ckb}.${fraction} CKB`;
+}
+
+/** Prints the "what this anchor costs" breakdown — skipped in --json mode, where the raw `cost` object speaks for itself. */
+function printCostBreakdown(cost: CostBreakdown | undefined, opts: AnchorOptions): void {
+  if (!cost || opts.json) return;
+  console.log("Cost breakdown:");
+  console.log(`  Locked capacity (refundable): ${formatShannons(cost.locked_capacity)}`);
+  console.log(`  Network fee: ${cost.network_fee} shannons`);
+  console.log(
+    cost.fee_configured && BigInt(cost.service_fee) > 0n
+      ? `  Service fee: ${formatShannons(cost.service_fee)}`
+      : "  Service fee: none",
+  );
+  console.log(FEE_EXPLAINER_TEXT);
 }
 
 function readManifestFile(path: string): Manifest {
@@ -57,6 +91,13 @@ function requireMode(mode: string): AnchorMode {
   return mode;
 }
 
+const MAX_FEE_CONTENTION_ATTEMPTS = 3;
+
+/** Whether `err` looks like a submit failure caused by a fee-collection pool cell another anchor won the race to spend first — see chain's `isFeeCellContentionError`. */
+function isRetryableFeeContention(err: unknown): boolean {
+  return err instanceof ApiRequestError && err.status === 502 && isFeeCellContentionError(err);
+}
+
 async function anchorNonCustodial(
   api: ApiClient,
   draft: ReturnType<typeof toManifestDraft>,
@@ -70,17 +111,30 @@ async function anchorNonCustodial(
   const signer = await loadSigner(chainClient, opts.signerKeyFile);
   const lock = (await signer.getRecommendedAddressObj()).script;
 
-  const prepared = await api.post<PrepareResponse>("/proofs/prepare", {
-    manifest: draft,
-    payer: { lock: { codeHash: lock.codeHash, hashType: lock.hashType, args: lock.args } },
-    ...(opts.prev ? { prev_tx_hash: opts.prev } : {}),
-  });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_FEE_CONTENTION_ATTEMPTS; attempt++) {
+    // Re-prepare from scratch on retry: the API picks a fresh pool cell to
+    // top up each time (chain's applyServiceFee), so a stale unsigned tx
+    // referencing an already-spent pool cell can never be resubmitted as-is.
+    const prepared = await api.post<PrepareResponse>("/proofs/prepare", {
+      manifest: draft,
+      payer: { lock: { codeHash: lock.codeHash, hashType: lock.hashType, args: lock.args } },
+      ...(opts.prev ? { prev_tx_hash: opts.prev } : {}),
+    });
+    if (attempt === 0) printCostBreakdown(prepared.cost, opts);
 
-  const unsignedTx = ccc.Transaction.from(prepared.tx as ccc.TransactionLike);
-  const signedTx = await signer.signTransaction(unsignedTx);
-  const txJson: unknown = JSON.parse(ccc.stringify(signedTx));
+    const unsignedTx = ccc.Transaction.from(prepared.tx as ccc.TransactionLike);
+    const signedTx = await signer.signTransaction(unsignedTx);
+    const txJson: unknown = JSON.parse(ccc.stringify(signedTx));
 
-  return api.post<SubmitResponse>("/proofs/submit", { tx: txJson });
+    try {
+      return await api.post<SubmitResponse>("/proofs/submit", { tx: txJson });
+    } catch (err) {
+      if (!isRetryableFeeContention(err)) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 async function anchorCustodial(
@@ -136,5 +190,8 @@ export async function runAnchor(manifestPath: string, opts: AnchorOptions): Prom
     console.log(`tx_hash: ${result.tx_hash}`);
     console.log(`unid:    ${result.unid}`);
     if ("note" in result && result.note) console.log(`note:    ${result.note}`);
+    // Non-custodial already printed its breakdown before signing (from
+    // /proofs/prepare); custodial has no pre-confirm step, so show it here.
+    if (mode === "custodial") printCostBreakdown(result.cost, opts);
   }
 }

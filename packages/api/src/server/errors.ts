@@ -42,6 +42,12 @@ export class ConflictError extends ProblemError {
   }
 }
 
+export class PaymentRequiredError extends ProblemError {
+  constructor(detail: string) {
+    super(402, "Payment Required", detail);
+  }
+}
+
 export interface ProblemDetails {
   type: string;
   title: string;

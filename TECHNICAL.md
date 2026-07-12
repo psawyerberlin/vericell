@@ -179,7 +179,7 @@ Two anchoring modes, because automation and self-custody pull in different direc
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/proofs/prepare` | Body: manifest draft (+ optional `prev_tx_hash` for a new version, + payer lock). Returns an **unsigned CKB transaction skeleton** and the exact capacity required. |
+| POST | `/proofs/prepare` | Body: manifest draft (+ optional `prev_tx_hash` for a new version, + payer lock). Returns an **unsigned CKB transaction skeleton**, the exact capacity required, and a `cost` breakdown (locked capacity, network fee, service fee — see §7.2-C). |
 | POST | `/proofs/submit` | Body: the signed transaction. API broadcasts it, creates a `pending` version row, returns `tx_hash`. |
 
 The user's key never leaves their machine; the CLI wraps both calls around a local CCC signer.
@@ -193,6 +193,14 @@ The user's key never leaves their machine; the CLI wraps both calls around a loc
 | DELETE | `/proofs/{unid}` | Withdraw: consumes the live cell without successor; capacity refunds to the payer |
 
 All mutating endpoints accept an `Idempotency-Key` header — retries never double-anchor.
+
+### 7.2-C Service fee
+
+VeriCell may charge a service fee on top of the locked capacity: **1% of the new proof cell's locked capacity, waived entirely below 300 CKB**, floored to the nearest shannon. The fee is per-network config only — `VERICELL_FEE_ADDRESS_TESTNET` / `VERICELL_FEE_ADDRESS_MAINNET` (server; `VITE_`-prefixed for the web build) — and is fully inert on any network where the corresponding variable is unset (no fee address is ever hardcoded in this repo).
+
+Mechanically, the fee is collected by topping up a pool of pre-funded ACP (anyone-can-pay, [RFC 0026](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)) cells owned by the configured address: a small fee can't be sent as its own output (CKB cells have a ~61 CKB minimum), so instead the anchoring transaction spends one of the operator's pool cells as both an input and an output, its capacity increased by the fee — a capacity *increase* at an ACP lock needs no signature from the fee recipient. `POST /proofs/prepare` (and the custodial anchor endpoints) build this leg automatically and report it in a `cost` field (`locked_capacity`, `network_fee`, `service_fee`, `fee_configured`); `POST /proofs/submit` independently recomputes the fee due from the signed transaction's own output capacity and rejects (`402 Payment Required`) a transaction that doesn't actually pay it.
+
+Operators set up and maintain the pool with `scripts/create-fee-cells.ts` (including a `--print-acp-address` mode to derive the collection address for a given owner address, with no key or broadcast involved) and consolidate accumulated fees back out with `scripts/sweep-fee-cells.ts` — see `docs/DEPLOY.md`.
 
 ### 7.3 Webhooks
 
