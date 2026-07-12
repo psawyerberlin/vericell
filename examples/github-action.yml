@@ -1,0 +1,68 @@
+# Example GitHub Action: anchor a release's manifest on VeriCell.
+#
+# Copy this into your own repository as .github/workflows/vericell-anchor.yml
+# (or adapt the two `vericell` steps into an existing release workflow).
+# Mirrors the automation flow in TECHNICAL.md §7.5:
+#
+#   vericell hash ./dist --out manifest.json
+#   vericell anchor manifest.json --api <url> --key $VERICELL_API_KEY \
+#     --mode non-custodial --signer-key-file ./ci-ckb-key
+#
+# Required repository secrets:
+#   VERICELL_API_KEY     — bearer key from `POST /api/v1/keys` (admin-minted)
+#   VERICELL_SIGNER_KEY  — 0x-prefixed CCC private key for a funded CKB
+#                          account; non-custodial mode means this key signs
+#                          locally in the runner and is never sent to the API
+# Required repository variable:
+#   VERICELL_API_URL     — e.g. https://api.vericell.example/api/v1
+#
+# `--mode non-custodial` is the default recommendation (TECHNICAL.md §9); to
+# use the custodial service wallet instead, drop --signer-key-file and the
+# key-file steps below, switch to `--mode custodial`, and add
+# `declared_author` to manifest.json before anchoring.
+
+name: VeriCell anchor
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  anchor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build release artifacts
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install the vericell CLI
+        run: npm install -g vericell
+
+      - name: Hash the release
+        run: vericell hash ./dist --out manifest.json
+
+      - name: Write the signer key
+        run: umask 077 && echo "${{ secrets.VERICELL_SIGNER_KEY }}" > ci-ckb-key
+
+      - name: Anchor on VeriCell
+        env:
+          VERICELL_API_URL: ${{ vars.VERICELL_API_URL }}
+          VERICELL_API_KEY: ${{ secrets.VERICELL_API_KEY }}
+        run: |
+          vericell anchor manifest.json \
+            --api "$VERICELL_API_URL" \
+            --key "$VERICELL_API_KEY" \
+            --mode non-custodial \
+            --signer-key-file ./ci-ckb-key
+
+      - name: Remove the signer key
+        if: always()
+        run: rm -f ci-ckb-key
