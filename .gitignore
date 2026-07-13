@@ -17,3 +17,4 @@ packages/web/datenschutz.html
 packages/web/haftungsausschluss.html
 packages/web/impressum.html
 mainnet-services.env
+stats-export/stats.json
