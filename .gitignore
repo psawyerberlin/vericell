@@ -13,3 +13,6 @@ coverage/
 offckb.env
 devnet-services.env
 testnet-services.env
+packages/web/datenschutz.html
+packages/web/haftungsausschluss.html
+packages/web/impressum.html
