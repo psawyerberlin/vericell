@@ -35,12 +35,14 @@ services:
       # A real hostname here gets Caddy's automatic HTTPS; ":80" serves
       # plain HTTP only, e.g. for local testing without a domain.
       CADDY_DOMAIN: ${CADDY_DOMAIN:-vericell.net}
+      STATS_TOKEN: ${STATS_TOKEN}
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - caddy-data:/data # ACME account + certificates, persisted across restarts
       - caddy-config:/config
+      - ~/vericell/stats-export:/stats-data:ro
     depends_on:
       - api
     restart: unless-stopped

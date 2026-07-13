@@ -18,6 +18,21 @@
 		reverse_proxy api:3000
 	}
 
+        # Read-only usage stats, gated by a token in the query string.
+        handle /stats.json {
+                @authorized {
+                        query pw={$STATS_TOKEN}
+                }
+                handle @authorized {
+			header Access-Control-Allow-Origin *
+                        root * /stats-data
+                        file_server
+                }
+                handle {
+                        respond 403
+                }
+        }
+
 	handle {
 		root * /srv/web
 		# The legal pages (impressum.html, datenschutz.html,
