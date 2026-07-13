@@ -109,7 +109,6 @@ describe.skipIf(!OFFCKB_ENABLED)("vericell CLI against offckb devnet", () => {
       network: "devnet",
       chainClient: () => client,
       adminToken,
-      custodialEnabled: false,
       rateLimit: { max: 1000, timeWindow: "1 minute" },
     });
     await app.listen({ port: 0, host: "127.0.0.1" });
@@ -172,7 +171,7 @@ describe.skipIf(!OFFCKB_ENABLED)("vericell CLI against offckb devnet", () => {
     ]);
   });
 
-  it("full non-custodial anchor via the CLI, then verify returns exit 0", async () => {
+  it("full anchor via the CLI, then verify returns exit 0", async () => {
     const manifestPath = join(scratchDir, "manifest.json");
     const hashRes = await runCli(["hash", fixtureDir, "--out", manifestPath]);
     expect(hashRes.exitCode).toBe(0);
@@ -184,8 +183,6 @@ describe.skipIf(!OFFCKB_ENABLED)("vericell CLI against offckb devnet", () => {
       apiUrl,
       "--key",
       apiKey,
-      "--mode",
-      "non-custodial",
       "--signer-key-file",
       signerKeyFile,
       "--json",

@@ -33,13 +33,6 @@ export const ManifestDraftSchema = z.object({
 
 export type ManifestDraft = z.infer<typeof ManifestDraftSchema>;
 
-/** Custodial anchors must declare an author (TECHNICAL.md §7.2-B): the cell's lock is the service wallet, not the author's own key. */
-export const CustodialManifestDraftSchema = ManifestDraftSchema.extend({
-  declared_author: z.string().min(1),
-});
-
-export type CustodialManifestDraft = z.infer<typeof CustodialManifestDraftSchema>;
-
 export const PayerSchema = z
   .object({
     lock: ScriptLikeSchema.optional(),
@@ -49,24 +42,33 @@ export const PayerSchema = z
     message: "either payer.lock or payer.address is required",
   });
 
-export const PrepareBodySchema = z.object({
+const TxHashSchema = z
+  .string()
+  .regex(TX_HASH_RE, "must be a 0x-prefixed 32-byte hex transaction hash");
+
+/** `prev_tx_hash` set = a new version consuming that live cell; unset = a brand-new project. */
+export const PrepareAnchorBodySchema = z.object({
   manifest: ManifestDraftSchema,
   payer: PayerSchema,
-  prev_tx_hash: z
-    .string()
-    .regex(TX_HASH_RE, "must be a 0x-prefixed 32-byte hex transaction hash")
-    .optional(),
+  prev_tx_hash: TxHashSchema.optional(),
 });
+
+export type PrepareAnchorBody = z.infer<typeof PrepareAnchorBodySchema>;
+
+/** Withdraw: consume the named live proof cell with no successor, refunding its owner. */
+export const PrepareWithdrawBodySchema = z.object({
+  withdraw_tx_hash: TxHashSchema,
+});
+
+export type PrepareWithdrawBody = z.infer<typeof PrepareWithdrawBodySchema>;
+
+export const PrepareBodySchema = z.union([PrepareWithdrawBodySchema, PrepareAnchorBodySchema]);
 
 export type PrepareBody = z.infer<typeof PrepareBodySchema>;
 
 /** The signed transaction, round-tripped through `ccc.stringify`/`Transaction.from` — see `server/txJson.ts`. */
 export const SubmitBodySchema = z.object({
   tx: z.unknown(),
-});
-
-export const CustodialAnchorBodySchema = z.object({
-  manifest: CustodialManifestDraftSchema,
 });
 
 export const CreateKeyBodySchema = z.object({

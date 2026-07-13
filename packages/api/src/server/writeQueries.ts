@@ -19,15 +19,15 @@ interface InsertPendingVersionParams {
  *
  * `live_tx_hash`/`live_index` are advanced optimistically even for a *new
  * version* of an existing project (not just a brand-new one) — this is
- * load-bearing, not just a UX nicety: a custodial caller chaining anchor →
- * new version → withdraw in quick succession (the exact `ClaudeCodeInstruction.md`
- * Phase 5 acceptance flow) needs `live_tx_hash` to already point at the new
- * version's cell by the time the withdraw request resolves it, or the
- * withdraw builds a tx against the now-dead previous cell and the broadcast
- * is rejected (`TransactionFailedToResolve`). The trade-off — a pending tx
- * that never confirms leaves `live_tx_hash` pointing at a cell that isn't
- * actually live — is the same one already accepted for brand-new projects;
- * reconciling a stuck/dropped pending tx is out of scope for this phase.
+ * load-bearing, not just a UX nicety: a caller chaining anchor → new version
+ * → withdraw in quick succession via prepare/submit needs `live_tx_hash` to
+ * already point at the new version's cell by the time the withdraw request
+ * resolves it, or the withdraw builds a tx against the now-dead previous
+ * cell and the broadcast is rejected (`TransactionFailedToResolve`). The
+ * trade-off — a pending tx that never confirms leaves `live_tx_hash`
+ * pointing at a cell that isn't actually live — is the same one already
+ * accepted for brand-new projects; reconciling a stuck/dropped pending tx is
+ * out of scope for this phase.
  */
 export function insertPendingVersion(
   db: Database.Database,

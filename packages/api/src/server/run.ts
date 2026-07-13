@@ -4,7 +4,6 @@ import { NETWORK } from "core";
 import { openDb } from "../db/open.js";
 import { warnIfMainnet } from "../mainnetWarning.js";
 import { buildServer, type NetworkBinding } from "./build.js";
-import { resolveCustodialEnabled } from "./chainClient.js";
 
 /**
  * Standalone API server entrypoint (Phase 10's `api` compose service).
@@ -55,12 +54,8 @@ async function main(): Promise<void> {
     const mainnetDb = openDb(undefined, "mainnet");
     dbs = [testnetDb, mainnetDb];
     const networks: Partial<Record<"testnet" | "mainnet", NetworkBinding>> = {
-      testnet: { db: testnetDb, custodialEnabled: resolveCustodialEnabled("testnet") },
-      // The mainnet side is always present in dual-network mode, regardless
-      // of which network `/api/v1/...` aliases to — its custodial gate
-      // (MAINNET_CONFIRM) applies here specifically, not to the process as
-      // a whole.
-      mainnet: { db: mainnetDb, custodialEnabled: resolveCustodialEnabled("mainnet") },
+      testnet: { db: testnetDb },
+      mainnet: { db: mainnetDb },
     };
     app = buildServer({ networks, defaultNetwork: NETWORK, loggerInstance: logger });
   } else {

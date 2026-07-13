@@ -10,7 +10,7 @@ import type { ManifestDraft } from "./writeSchemas.js";
  */
 export async function buildFullManifest(
   draft: ManifestDraft,
-  extra?: Pick<Manifest, "genesis" | "prev" | "declared_author">,
+  extra?: Pick<Manifest, "genesis" | "prev">,
 ): Promise<Manifest> {
   const entries = draft.files.map((f) => ({ path: f.p, hash: f.h }));
   const project_sha256 = await projectHash(entries);

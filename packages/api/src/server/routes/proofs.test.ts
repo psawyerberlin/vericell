@@ -3,14 +3,12 @@ import { ccc, FakeClient, type ProofResult } from "chain";
 import { openDb } from "../../db/open.js";
 import { hashApiKey } from "../auth.js";
 import { buildServer, type TypedApp } from "../build.js";
-import type { GetCustodialSignerFn } from "../chainClient.js";
 import type { FetchProofFn } from "../chainLookup.js";
 
 // A fixed test-only private key — never used for anything but FakeClient
 // fixtures. FakeClient doesn't verify witness signatures, so its exact
 // value is irrelevant beyond deriving a stable lock/address.
 const PAYER_PRIVATE_KEY = "0x" + "ab".repeat(32);
-const SERVICE_PRIVATE_KEY = "0x" + "cd".repeat(32);
 
 const API_KEY = "vk_test_0123456789abcdef0123456789abcdef";
 const API_KEY_HASH = hashApiKey(API_KEY);
@@ -34,7 +32,6 @@ interface Setup {
   client: FakeClient;
   payerLock: ccc.Script;
   payerSigner: ccc.SignerCkbPrivateKey;
-  serviceLock: ccc.Script;
 }
 
 /** Default `fetchProofFromChain` for tests that never need a real chain-lookup answer. */
@@ -46,9 +43,7 @@ const NULL_PROOF: ProofResult = {
   ownerAddress: null,
 };
 
-async function setup(
-  opts: { custodialEnabled?: boolean; fetchProof?: FetchProofFn } = {},
-): Promise<Setup> {
+async function setup(opts: { fetchProof?: FetchProofFn } = {}): Promise<Setup> {
   const db = openDb(":memory:");
   db.prepare(
     "INSERT INTO api_keys (key_hash, label, created_at, rate_limit) VALUES (?, ?, ?, ?)",
@@ -61,26 +56,16 @@ async function setup(
   const payerLock = (await payerSigner.getRecommendedAddressObj()).script;
   seedWalletCapacity(client, payerLock, "0x" + "11".repeat(32), 100_000);
 
-  const custodialSigner: GetCustodialSignerFn = async () => {
-    const signer = new ccc.SignerCkbPrivateKey(client, SERVICE_PRIVATE_KEY);
-    await signer.connect();
-    return signer;
-  };
-  const serviceLock = (await (await custodialSigner()).getRecommendedAddressObj()).script;
-  seedWalletCapacity(client, serviceLock, "0x" + "22".repeat(32), 100_000);
-
   const app = buildServer({
     db,
     network: "devnet",
     chainClient: () => client,
     fetchProof: opts.fetchProof ?? (async () => NULL_PROOF),
     adminToken: ADMIN_TOKEN,
-    custodialEnabled: opts.custodialEnabled ?? false,
-    custodialSigner,
     rateLimit: { max: 1000, timeWindow: "1 minute" },
   });
 
-  return { app, client, payerLock, payerSigner, serviceLock };
+  return { app, client, payerLock, payerSigner };
 }
 
 const MANIFEST_DRAFT = {
@@ -495,103 +480,8 @@ describe("POST /api/v1/proofs/submit", () => {
   });
 });
 
-describe("custodial proofs (CUSTODIAL_ENABLED)", () => {
-  it("403s when custodial mode is disabled", async () => {
-    const ctx = await setup({ custodialEnabled: false });
-    const res = await ctx.app.inject({
-      method: "POST",
-      url: "/api/v1/proofs",
-      headers: { authorization: `Bearer ${API_KEY}` },
-      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
-    });
-    expect(res.statusCode).toBe(403);
-  });
-
-  it("400s when declared_author is missing", async () => {
-    const ctx = await setup({ custodialEnabled: true });
-    const res = await ctx.app.inject({
-      method: "POST",
-      url: "/api/v1/proofs",
-      headers: { authorization: `Bearer ${API_KEY}` },
-      payload: { manifest: MANIFEST_DRAFT },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it("anchors, adds a new version, and withdraws end to end", async () => {
-    const ctx = await setup({ custodialEnabled: true });
-    const authHeaders = { authorization: `Bearer ${API_KEY}` };
-
-    const anchorRes = await ctx.app.inject({
-      method: "POST",
-      url: "/api/v1/proofs",
-      headers: authHeaders,
-      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
-    });
-    expect(anchorRes.statusCode).toBe(202);
-    const anchorBody = anchorRes.json();
-    expect(anchorBody.tx_hash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(anchorBody.note).toMatch(/custodial/i);
-    const { unid } = anchorBody;
-
-    const versionRes = await ctx.app.inject({
-      method: "POST",
-      url: `/api/v1/proofs/${unid}/versions`,
-      headers: authHeaders,
-      payload: {
-        manifest: {
-          title: "Test Project v2",
-          files: [{ p: "a.txt", h: "b".repeat(64) }],
-          declared_author: "alice",
-        },
-      },
-    });
-    expect(versionRes.statusCode).toBe(202);
-    const versionBody = versionRes.json();
-    expect(versionBody.unid).toBe(unid);
-    expect(versionBody.tx_hash).not.toBe(anchorBody.tx_hash);
-
-    const withdrawRes = await ctx.app.inject({
-      method: "DELETE",
-      url: `/api/v1/proofs/${unid}`,
-      headers: authHeaders,
-    });
-    expect(withdrawRes.statusCode).toBe(202);
-    const withdrawBody = withdrawRes.json();
-    expect(withdrawBody.unid).toBe(unid);
-    expect(BigInt(withdrawBody.refund_capacity)).toBeGreaterThan(0n);
-
-    const projectRow = ctx.app.db
-      .prepare("SELECT active, live_tx_hash FROM projects WHERE unid = ?")
-      .get(unid) as { active: number; live_tx_hash: string | null } | undefined;
-    expect(projectRow?.active).toBe(0);
-    expect(projectRow?.live_tx_hash).toBeNull();
-  });
-
-  it("404s withdrawing an unknown project", async () => {
-    const ctx = await setup({ custodialEnabled: true });
-    const res = await ctx.app.inject({
-      method: "DELETE",
-      url: "/api/v1/proofs/does-not-exist",
-      headers: { authorization: `Bearer ${API_KEY}` },
-    });
-    expect(res.statusCode).toBe(404);
-  });
-
-  it("404s adding a version to an unknown project", async () => {
-    const ctx = await setup({ custodialEnabled: true });
-    const res = await ctx.app.inject({
-      method: "POST",
-      url: "/api/v1/proofs/does-not-exist/versions",
-      headers: { authorization: `Bearer ${API_KEY}` },
-      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
-    });
-    expect(res.statusCode).toBe(404);
-  });
-
-  it("403s versioning/withdrawing a project the service wallet doesn't own", async () => {
-    const ctx = await setup({ custodialEnabled: true });
-    // Anchored non-custodially (payer-owned lock), not via the service wallet.
+describe("POST /api/v1/proofs/prepare — withdraw (withdraw_tx_hash)", () => {
+  async function anchorV1(ctx: Setup): Promise<string> {
     const prepareRes = await ctx.app.inject({
       method: "POST",
       url: "/api/v1/proofs/prepare",
@@ -606,22 +496,96 @@ describe("custodial proofs (CUSTODIAL_ENABLED)", () => {
       headers: { authorization: `Bearer ${API_KEY}` },
       payload: { tx: JSON.parse(ccc.stringify(signedTx)) as unknown },
     });
-    const { unid } = submitRes.json();
+    return submitRes.json().tx_hash as string;
+  }
 
-    const versionRes = await ctx.app.inject({
+  it("prepares an unsigned withdraw tx and submit consumes it, marking the project inactive", async () => {
+    const proofs = new Map<string, ProofResult>();
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+    const v1TxHash = await anchorV1(ctx);
+    proofs.set(v1TxHash, {
+      manifest: {
+        app: "vericell",
+        v: 1,
+        title: "Test Project",
+        created: new Date().toISOString(),
+      } as never,
+      live: true,
+      blockNumber: 1n,
+      blockTime: new Date(),
+      ownerAddress: ccc.Address.fromScript(ctx.payerLock, ctx.client).toString(),
+    });
+
+    const prepareRes = await ctx.app.inject({
       method: "POST",
-      url: `/api/v1/proofs/${unid}/versions`,
+      url: "/api/v1/proofs/prepare",
       headers: { authorization: `Bearer ${API_KEY}` },
-      payload: { manifest: { ...MANIFEST_DRAFT, declared_author: "alice" } },
+      payload: { withdraw_tx_hash: v1TxHash },
     });
-    expect(versionRes.statusCode).toBe(403);
+    expect(prepareRes.statusCode).toBe(200);
+    const prepared = prepareRes.json();
+    expect(BigInt(prepared.refund_capacity)).toBeGreaterThan(0n);
+    expect(prepared.tx.outputs).toHaveLength(1);
+    expect(prepared.tx.outputs[0].lock.args).toBe(ctx.payerLock.args);
 
-    const withdrawRes = await ctx.app.inject({
-      method: "DELETE",
-      url: `/api/v1/proofs/${unid}`,
+    const signedTx = await ctx.payerSigner.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
       headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) as unknown },
     });
-    expect(withdrawRes.statusCode).toBe(403);
+    expect(submitRes.statusCode).toBe(202);
+    const withdrawBody = submitRes.json();
+    expect(withdrawBody.tx_hash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(BigInt(withdrawBody.refund_capacity)).toBeGreaterThan(0n);
+
+    const projectRow = ctx.app.db
+      .prepare("SELECT active, live_tx_hash FROM projects WHERE unid = ?")
+      .get(withdrawBody.unid) as { active: number; live_tx_hash: string | null } | undefined;
+    expect(projectRow?.active).toBe(0);
+    expect(projectRow?.live_tx_hash).toBeNull();
+  });
+
+  it("404s when withdraw_tx_hash has no proof on chain", async () => {
+    const ctx = await setup({ fetchProof: async () => NULL_PROOF });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { withdraw_tx_hash: "0x" + "99".repeat(32) },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("409s when withdraw_tx_hash is not live (already superseded or withdrawn)", async () => {
+    const deadTxHash = "0x" + "88".repeat(32);
+    const proofs = new Map<string, ProofResult>([
+      [
+        deadTxHash,
+        {
+          manifest: {
+            app: "vericell",
+            v: 1,
+            title: "dead",
+            created: new Date().toISOString(),
+          } as never,
+          live: false,
+          blockNumber: 1n,
+          blockTime: new Date(),
+          ownerAddress: null,
+        },
+      ],
+    ]);
+    const ctx = await setup({ fetchProof: async (txHash) => proofs.get(txHash) ?? NULL_PROOF });
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { withdraw_tx_hash: deadTxHash },
+    });
+    expect(res.statusCode).toBe(409);
   });
 });
 

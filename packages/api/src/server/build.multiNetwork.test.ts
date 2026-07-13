@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { hashApiKey } from "./auth.js";
 import { openDb } from "../db/open.js";
 import { buildServer, type TypedApp } from "./build.js";
 import { FIXTURE, fakeFetchProof, fakeGetTip, seedFixtureDb } from "./testFixtures.js";
@@ -24,13 +23,11 @@ function setupDualNetwork() {
         db: testnetDb,
         fetchProof: fakeFetchProof(),
         getTip: fakeGetTip(120n),
-        custodialEnabled: true,
       },
       mainnet: {
         db: mainnetDb,
         fetchProof: fakeFetchProof(),
         getTip: fakeGetTip(50n),
-        custodialEnabled: false,
       },
     },
     defaultNetwork: "testnet",
@@ -137,59 +134,16 @@ describe("dual-network route mounting (Phase 10a)", () => {
 
     const onMainnet = await app.inject({
       method: "POST",
-      url: "/api/v1/mainnet/proofs",
+      url: "/api/v1/mainnet/proofs/prepare",
       headers: { authorization: `Bearer ${key}` },
       payload: {
-        manifest: {
-          title: "x",
-          declared_author: "someone",
-          files: [{ p: "a.txt", h: "a".repeat(64) }],
-        },
+        manifest: { title: "x", files: [{ p: "a.txt", h: "a".repeat(64) }] },
+        // Auth (401) is rejected in `preHandler`, before the handler ever
+        // parses this — its content never matters for this test.
+        payer: { address: "placeholder" },
       },
     });
     expect(onMainnet.statusCode).toBe(401);
-  });
-
-  it("each network's custodial-mode gate is independent (mainnet's is off, testnet's is on)", async () => {
-    // Same key hash inserted directly into both DBs, so this test isolates
-    // the custodial-mode gate itself from the (separately tested) api-key
-    // isolation above.
-    const key = "vk_" + "a".repeat(64);
-    const keyHash = hashApiKey(key);
-    for (const db of [testnetDb, mainnetDb]) {
-      db.prepare(
-        "INSERT INTO api_keys (key_hash, label, created_at, rate_limit) VALUES (?, ?, ?, ?)",
-      ).run(keyHash, "shared-fixture", new Date().toISOString(), 1000);
-    }
-
-    const payload = {
-      manifest: {
-        title: "x",
-        declared_author: "someone",
-        files: [{ p: "a.txt", h: "a".repeat(64) }],
-      },
-    };
-
-    const onMainnet = await app.inject({
-      method: "POST",
-      url: "/api/v1/mainnet/proofs",
-      headers: { authorization: `Bearer ${key}` },
-      payload,
-    });
-    expect(onMainnet.statusCode).toBe(403);
-    expect(onMainnet.json().detail).toMatch(/Custodial mode is disabled/);
-
-    const onTestnet = await app.inject({
-      method: "POST",
-      url: "/api/v1/testnet/proofs",
-      headers: { authorization: `Bearer ${key}` },
-      payload,
-    });
-    // custodialEnabled: true on testnet clears the disabled-mode gate
-    // entirely — it fails later for unrelated reasons (no real chain/signer
-    // wired up in this unit test), but never with "Custodial mode is
-    // disabled", which is the one thing this test is proving.
-    expect(onTestnet.statusCode).not.toBe(403);
   });
 
   it("OpenAPI documents the network path via a templated server variable", async () => {

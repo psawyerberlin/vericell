@@ -92,18 +92,6 @@ describe("ApiClient", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer vk_test");
   });
 
-  it("DELETE issues a DELETE request", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, { deleted: true }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new ApiClient({ baseUrl: "http://api.test/api/v1", apiKey: "vk_test" });
-    await client.delete("/proofs/unid1");
-
-    expect((fetchMock.mock.calls[0]?.[1] as NonNullable<Parameters<typeof fetch>[1]>).method).toBe(
-      "DELETE",
-    );
-  });
-
   it("throws ApiRequestError with the problem+json detail on a non-2xx response", async () => {
     const fetchMock = vi
       .fn()

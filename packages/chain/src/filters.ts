@@ -9,8 +9,8 @@ import { ccc } from "@ckb-ccc/ccc";
  * funding source. That both corrupts the unrelated project's on-chain state
  * (its cell is now dead with no successor) and would be mis-happending to a
  * "consumed" event by an indexer with no idea why it disappeared. A single
- * service wallet anchoring many projects (Phase 5's custodial mode) makes
- * this a real, not theoretical, risk.
+ * wallet anchoring many projects over time makes this a real, not
+ * theoretical, risk.
  */
 export const PURE_CAPACITY_FILTER: ccc.ClientIndexerSearchKeyFilterLike = {
   outputDataLenRange: [0, 1],

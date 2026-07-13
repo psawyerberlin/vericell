@@ -55,10 +55,9 @@ program
   .argument("<manifest>", "path to a manifest.json produced by `vericell hash`")
   .requiredOption("--api <url>", API_URL_HELP)
   .requiredOption("--key <key>", "VeriCell API key")
-  .requiredOption("--mode <mode>", "non-custodial or custodial")
-  .option(
+  .requiredOption(
     "--signer-key-file <file>",
-    "local CCC private key file (required for --mode non-custodial)",
+    "local CCC private key file — signs locally, never sent to the API",
   )
   .option("--prev <tx>", "previous version's tx hash, to anchor a new version")
   .option("--json", "machine-readable output")
@@ -105,10 +104,9 @@ program
   .argument("<unid>", "project UNID")
   .requiredOption("--api <url>", API_URL_HELP)
   .requiredOption("--key <key>", "VeriCell API key")
-  .option("--mode <mode>", "non-custodial or custodial (default: custodial)")
-  .option(
+  .requiredOption(
     "--signer-key-file <file>",
-    "local CCC private key file (required for --mode non-custodial)",
+    "local CCC private key file — signs locally, never sent to the API",
   )
   .option("--json", "machine-readable output")
   .action(async (unid: string, opts: WithdrawOptions) => {

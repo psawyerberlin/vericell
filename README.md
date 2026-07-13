@@ -73,4 +73,4 @@ capacity. The locked capacity itself is never spent — it stays refundable to
 you later, by withdrawing the proof cell or superseding it with a new
 version. Only the service fee (when one applies) leaves your wallet for
 good. A deployment with no fee address configured charges nothing at all —
-see `TECHNICAL.md` §7.2-C and `docs/DEPLOY.md`'s fee-cell setup section.
+see `TECHNICAL.md` §7.2-B and `docs/DEPLOY.md`'s fee-cell setup section.

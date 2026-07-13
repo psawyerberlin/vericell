@@ -57,7 +57,6 @@ services:
       # Whichever network this names gets the bare /api/v1/... alias; both
       # testnet and mainnet route trees are mounted either way.
       VERICELL_NETWORK: ${VERICELL_NETWORK:-mainnet}
-      MAINNET_CONFIRM: ${MAINNET_CONFIRM:-}
       # Public RPC by default (unset) — see docs/DEPLOY.md for why a
       # self-hosted node override here applies to both networks at once.
       VERICELL_RPC_URL: ${VERICELL_RPC_URL:-}
@@ -65,8 +64,6 @@ services:
       PORT: "3000"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN before starting the stack}
-      CUSTODIAL_ENABLED: ${CUSTODIAL_ENABLED:-}
-      SERVICE_PRIVATE_KEY: ${SERVICE_PRIVATE_KEY:-}
       WEBHOOK_ALLOW_PRIVATE_NETWORKS: ${WEBHOOK_ALLOW_PRIVATE_NETWORKS:-}
       VERICELL_FEE_ADDRESS_TESTNET: ${VERICELL_FEE_ADDRESS_TESTNET:-}
       VERICELL_FEE_ADDRESS_MAINNET: ${VERICELL_FEE_ADDRESS_MAINNET:-}
@@ -99,7 +96,6 @@ services:
     command: ["node", "dist/indexer/run.js"]
     environment:
       VERICELL_NETWORK: mainnet
-      MAINNET_CONFIRM: ${MAINNET_CONFIRM:-}
       VERICELL_RPC_URL: ${VERICELL_RPC_URL:-}
       DB_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-info}

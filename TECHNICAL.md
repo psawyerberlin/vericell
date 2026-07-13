@@ -38,7 +38,6 @@ VeriCell solves all three by storing a hash **manifest** in a CKB cell:
 │  · REST API  /api/v1  (OpenAPI 3.1)                                  │
 │  · Indexer worker: follows the chain, parses manifests               │
 │  · DB (SQLite → PostgreSQL): projects / versions / hashes            │
-│  · optional signing wallet for custodial automation mode             │
 └──────────┬───────────────────────────────────────────────────────────┘
            │ RPC (CKB node / public RPC)
            ▼
@@ -173,32 +172,22 @@ Verification never uploads files: clients hash locally (CLI, browser, `sha256sum
 
 ### 7.2 Authenticated endpoints — `Authorization: Bearer <api-key>`
 
-Two anchoring modes, because automation and self-custody pull in different directions:
-
-**A. Non-custodial (recommended):** the API prepares, the client signs.
+Non-custodial only: the API prepares an unsigned transaction, the client signs it locally and submits the result — the API never holds a private key, and every proof cell's lock is the caller's own wallet. This single flow covers all three transaction shapes a project's lifecycle needs:
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/proofs/prepare` | Body: manifest draft (+ optional `prev_tx_hash` for a new version, + payer lock). Returns an **unsigned CKB transaction skeleton**, the exact capacity required, and a `cost` breakdown (locked capacity, network fee, service fee — see §7.2-C). |
-| POST | `/proofs/submit` | Body: the signed transaction. API broadcasts it, creates a `pending` version row, returns `tx_hash`. |
+| POST | `/proofs/prepare` | Body is one of: a manifest draft (+ optional `prev_tx_hash` for a new version, + payer lock) for an anchor, or `{ withdraw_tx_hash }` for a withdraw. Returns an **unsigned CKB transaction skeleton** — for an anchor, also the exact capacity required and a `cost` breakdown (locked capacity, network fee, service fee — see §7.2-B); for a withdraw, the refund capacity. |
+| POST | `/proofs/submit` | Body: the signed transaction (anchor or withdraw — the API tells them apart by whether output 0 carries manifest bytes). API broadcasts it; an anchor creates a `pending` version row and returns `tx_hash`/`unid`; a withdraw clears the project's live version and returns `tx_hash`/`unid`/`refund_capacity`. |
 
-The user's key never leaves their machine; the CLI wraps both calls around a local CCC signer.
+The user's key never leaves their machine; the CLI wraps both calls around a local CCC signer for `anchor` and `withdraw` alike. All mutating endpoints accept an `Idempotency-Key` header — retries never double-anchor.
 
-**B. Custodial service-wallet (CI convenience):** the API signs with a server-held hot wallet.
-
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/proofs` | Body: manifest draft. API funds, signs and broadcasts. The cell lock is the **service wallet**, so the manifest must include a `declared_author` field and, ideally, a detached signature by the author's long-term key. Trade-off documented to the caller in the response. |
-| POST | `/proofs/{unid}/versions` | New version: consumes the current live cell, creates the successor |
-| DELETE | `/proofs/{unid}` | Withdraw: consumes the live cell without successor; capacity refunds to the payer |
-
-All mutating endpoints accept an `Idempotency-Key` header — retries never double-anchor.
-
-### 7.2-C Service fee
+### 7.2-B Service fee
 
 VeriCell may charge a service fee on top of the locked capacity: **1% of the new proof cell's locked capacity, waived entirely below 300 CKB**, floored to the nearest shannon. The fee is per-network config only — `VERICELL_FEE_ADDRESS_TESTNET` / `VERICELL_FEE_ADDRESS_MAINNET` (server; `VITE_`-prefixed for the web build) — and is fully inert on any network where the corresponding variable is unset (no fee address is ever hardcoded in this repo).
 
-Mechanically, the fee is collected by topping up a pool of pre-funded ACP (anyone-can-pay, [RFC 0026](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)) cells owned by the configured address: a small fee can't be sent as its own output (CKB cells have a ~61 CKB minimum), so instead the anchoring transaction spends one of the operator's pool cells as both an input and an output, its capacity increased by the fee — a capacity *increase* at an ACP lock needs no signature from the fee recipient. `POST /proofs/prepare` (and the custodial anchor endpoints) build this leg automatically and report it in a `cost` field (`locked_capacity`, `network_fee`, `service_fee`, `fee_configured`); `POST /proofs/submit` independently recomputes the fee due from the signed transaction's own output capacity and rejects (`402 Payment Required`) a transaction that doesn't actually pay it.
+The fee applies to **every transaction that creates a new proof cell**, regardless of origin — a first anchor or a new version, whether built by the web app, the CLI, or any other API-prepared transaction. `POST /proofs/prepare` always builds the fee leg into the returned transaction and reports it in the `cost` field; `POST /proofs/submit` independently recomputes the fee due from the signed transaction's own output capacity and rejects (`402 Payment Required`) a transaction that doesn't actually pay it, for both the first-anchor and new-version paths — a client cannot skip the fee by stripping the leg before signing. Withdrawals create no new proof cell and so carry no service fee at all — `/proofs/prepare`'s withdraw response has no `cost` field, and `/proofs/submit` never requires one for a withdraw transaction.
+
+Mechanically, the fee is collected by topping up a pool of pre-funded ACP (anyone-can-pay, [RFC 0026](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)) cells owned by the configured address: a small fee can't be sent as its own output (CKB cells have a ~61 CKB minimum), so instead the anchoring transaction spends one of the operator's pool cells as both an input and an output, its capacity increased by the fee — a capacity *increase* at an ACP lock needs no signature from the fee recipient.
 
 Operators set up and maintain the pool with `scripts/create-fee-cells.ts` (including a `--print-acp-address` mode to derive the collection address for a given owner address, with no key or broadcast involved) and consolidate accumulated fees back out with `scripts/sweep-fee-cells.ts` — see `docs/DEPLOY.md`.
 
@@ -223,7 +212,7 @@ vericell hash ./dist --out manifest.json
 vericell anchor manifest.json \
   --api https://api.vericell.example/api/v1 \
   --key $VERICELL_API_KEY \
-  --mode non-custodial --signer-key-file ./ci-ckb-key   # or --mode custodial
+  --signer-key-file ./ci-ckb-key
 # poll or receive webhook: status pending → committed
 vericell status <unid>
 ```
@@ -242,7 +231,7 @@ vericell status <unid>
 
 - **Proof of knowledge, not authorship in the legal sense.** The chain proves the wallet owner knew the hashes at block time — first-to-anchor wins. Anchor *before* publishing.
 - **Manifest timestamps are claims; block timestamps are authoritative.** Both are shown, labeled.
-- **Custodial mode weakens the ownership property** (the cell lock is the service wallet). It exists for CI convenience only; the `declared_author` + detached-signature pattern partially restores attribution. Default and recommendation: non-custodial.
+- **Every anchor is non-custodial.** The API never holds a signing key; every proof cell's lock is the caller's own wallet, so only the author can consume/supersede it.
 - **API keys** are bearer secrets: hashed at rest, never logged, revocable, per-key rate limits.
 - **CORS** limits the URL source in-browser; the CLI or API-side fetching covers server-to-server cases.
 - **JSON in cell data** is readable but not the cheapest encoding; Molecule (CKB's canonical serialization) would cut size ~30% — natural v2 format.
@@ -277,6 +266,6 @@ The target chain is a single constant resolved from the environment, defined onc
 | `VERICELL_NETWORK` | API, indexer, CLI (runtime) | `devnet` \| `testnet` \| `mainnet` | `testnet` |
 | `VITE_VERICELL_NETWORK` | web app (baked at build time) | same | `testnet` |
 
-Testing and staging always run on **testnet** (test CKB: faucet.nervos.org); automated tests use a local **devnet** (offckb). Deploying online to **mainnet** means setting the variable at deploy time — no code changes. Safeguards: the DB file is network-scoped (`vericell.<network>.sqlite`), the active network is shown in the web top bar, `/health`, `/stats` and CLI output, and custodial mode on mainnet additionally requires `MAINNET_CONFIRM=1`.
+Testing and staging always run on **testnet** (test CKB: faucet.nervos.org); automated tests use a local **devnet** (offckb). Deploying online to **mainnet** means setting the variable at deploy time — no code changes. Safeguards: the DB file is network-scoped (`vericell.<network>.sqlite`), the active network is shown in the web top bar, `/health`, `/stats` and CLI output, and every mainnet startup logs a prominent warning.
 
 Wallets: JoyID via CCC; every other CCC signer plugs into the same `Signer` interface.

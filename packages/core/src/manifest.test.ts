@@ -70,7 +70,7 @@ describe("encodeManifest / decodeManifest", () => {
     expect(decoded).toEqual(baseManifest);
   });
 
-  it("round-trips a versioned, custodial manifest (genesis + prev + declared_author)", () => {
+  it("round-trips a versioned manifest with a declared_author (genesis + prev + declared_author)", () => {
     const versioned: Manifest = {
       ...baseManifest,
       genesis: TX_HASH,

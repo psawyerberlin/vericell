@@ -148,10 +148,10 @@ echo "vericell e2e fixture $(date +%s)" >"${FIXTURE_DIR}/release.txt"
 log "vericell hash"
 node packages/cli/dist/index.js hash "$FIXTURE_DIR" --out "$MANIFEST_PATH" --json
 
-log "vericell anchor --mode non-custodial"
+log "vericell anchor"
 ANCHOR_JSON="$(node packages/cli/dist/index.js anchor "$MANIFEST_PATH" \
   --api "$API_URL" --key "$API_KEY" \
-  --mode non-custodial --signer-key-file "$SIGNER_KEY_FILE" --json)"
+  --signer-key-file "$SIGNER_KEY_FILE" --json)"
 TX_HASH="$(node -e "console.log(JSON.parse(process.argv[1]).tx_hash)" "$ANCHOR_JSON")"
 UNID="$(node -e "console.log(JSON.parse(process.argv[1]).unid)" "$ANCHOR_JSON")"
 [ -n "$TX_HASH" ] && [ -n "$UNID" ] || fail "anchor did not return a tx_hash/unid: $ANCHOR_JSON"

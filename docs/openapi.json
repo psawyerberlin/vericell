@@ -3,7 +3,7 @@
   "info": {
     "title": "VeriCell API",
     "description": "Proof of authorship, integrity and time for any digital project, anchored on Nervos CKB. Public read-only endpoints — see TECHNICAL.md §7.1.",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "components": {
     "schemas": {}
@@ -244,7 +244,7 @@
     },
     "/testnet/proofs/prepare": {
       "post": {
-        "summary": "Build an unsigned anchor transaction for the caller to sign locally",
+        "summary": "Build an unsigned anchor or withdraw transaction for the caller to sign locally",
         "tags": [
           "proofs"
         ],
@@ -253,103 +253,120 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
+                "anyOf": [
+                  {
                     "type": "object",
                     "properties": {
-                      "title": {
+                      "withdraw_tx_hash": {
                         "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
+                        "pattern": "^0x[0-9a-fA-F]{64}$"
                       }
                     },
                     "required": [
-                      "title",
-                      "files"
+                      "withdraw_tx_hash"
                     ],
                     "additionalProperties": false
                   },
-                  "payer": {
+                  {
                     "type": "object",
                     "properties": {
-                      "lock": {
+                      "manifest": {
                         "type": "object",
                         "properties": {
-                          "codeHash": {
+                          "title": {
                             "type": "string",
-                            "pattern": "^0x[0-9a-fA-F]{64}$"
+                            "minLength": 1
                           },
-                          "hashType": {
+                          "created": {
                             "type": "string",
-                            "enum": [
-                              "type",
-                              "data",
-                              "data1",
-                              "data2"
-                            ]
+                            "format": "date-time"
                           },
-                          "args": {
+                          "source": {
                             "type": "string",
-                            "pattern": "^0x([0-9a-fA-F]{2})*$"
+                            "format": "uri"
+                          },
+                          "files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "p": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "h": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              },
+                              "required": [
+                                "p",
+                                "h"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "minItems": 1
+                          },
+                          "compact": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
-                          "codeHash",
-                          "hashType",
-                          "args"
+                          "title",
+                          "files"
                         ],
                         "additionalProperties": false
                       },
-                      "address": {
+                      "payer": {
+                        "type": "object",
+                        "properties": {
+                          "lock": {
+                            "type": "object",
+                            "properties": {
+                              "codeHash": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-fA-F]{64}$"
+                              },
+                              "hashType": {
+                                "type": "string",
+                                "enum": [
+                                  "type",
+                                  "data",
+                                  "data1",
+                                  "data2"
+                                ]
+                              },
+                              "args": {
+                                "type": "string",
+                                "pattern": "^0x([0-9a-fA-F]{2})*$"
+                              }
+                            },
+                            "required": [
+                              "codeHash",
+                              "hashType",
+                              "args"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "address": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "prev_tx_hash": {
                         "type": "string",
-                        "minLength": 1
+                        "pattern": "^0x[0-9a-fA-F]{64}$"
                       }
                     },
+                    "required": [
+                      "manifest",
+                      "payer"
+                    ],
                     "additionalProperties": false
-                  },
-                  "prev_tx_hash": {
-                    "type": "string",
-                    "pattern": "^0x[0-9a-fA-F]{64}$"
                   }
-                },
-                "required": [
-                  "manifest",
-                  "payer"
-                ],
-                "additionalProperties": false
+                ]
               }
             }
           }
@@ -363,7 +380,7 @@
     },
     "/testnet/proofs/submit": {
       "post": {
-        "summary": "Broadcast a signed anchor transaction",
+        "summary": "Broadcast a signed anchor or withdraw transaction",
         "tags": [
           "proofs"
         ],
@@ -381,203 +398,6 @@
             }
           }
         },
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/testnet/proofs": {
-      "post": {
-        "summary": "Custodial anchor: the service wallet funds, signs and broadcasts",
-        "tags": [
-          "proofs"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
-                    "type": "object",
-                    "properties": {
-                      "title": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
-                      },
-                      "declared_author": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    },
-                    "required": [
-                      "title",
-                      "files",
-                      "declared_author"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "manifest"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/testnet/proofs/{unid}/versions": {
-      "post": {
-        "summary": "Custodial new version: consumes the live cell, creates the successor",
-        "tags": [
-          "proofs"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
-                    "type": "object",
-                    "properties": {
-                      "title": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
-                      },
-                      "declared_author": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    },
-                    "required": [
-                      "title",
-                      "files",
-                      "declared_author"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "manifest"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "unid",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/testnet/proofs/{unid}": {
-      "delete": {
-        "summary": "Custodial withdraw: consumes the live cell, no successor",
-        "tags": [
-          "proofs"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "unid",
-            "required": true
-          }
-        ],
         "responses": {
           "200": {
             "description": "Default Response"
@@ -894,7 +714,7 @@
     },
     "/proofs/prepare": {
       "post": {
-        "summary": "Build an unsigned anchor transaction for the caller to sign locally",
+        "summary": "Build an unsigned anchor or withdraw transaction for the caller to sign locally",
         "tags": [
           "proofs"
         ],
@@ -903,103 +723,120 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
+                "anyOf": [
+                  {
                     "type": "object",
                     "properties": {
-                      "title": {
+                      "withdraw_tx_hash": {
                         "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
+                        "pattern": "^0x[0-9a-fA-F]{64}$"
                       }
                     },
                     "required": [
-                      "title",
-                      "files"
+                      "withdraw_tx_hash"
                     ],
                     "additionalProperties": false
                   },
-                  "payer": {
+                  {
                     "type": "object",
                     "properties": {
-                      "lock": {
+                      "manifest": {
                         "type": "object",
                         "properties": {
-                          "codeHash": {
+                          "title": {
                             "type": "string",
-                            "pattern": "^0x[0-9a-fA-F]{64}$"
+                            "minLength": 1
                           },
-                          "hashType": {
+                          "created": {
                             "type": "string",
-                            "enum": [
-                              "type",
-                              "data",
-                              "data1",
-                              "data2"
-                            ]
+                            "format": "date-time"
                           },
-                          "args": {
+                          "source": {
                             "type": "string",
-                            "pattern": "^0x([0-9a-fA-F]{2})*$"
+                            "format": "uri"
+                          },
+                          "files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "p": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "h": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              },
+                              "required": [
+                                "p",
+                                "h"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "minItems": 1
+                          },
+                          "compact": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
-                          "codeHash",
-                          "hashType",
-                          "args"
+                          "title",
+                          "files"
                         ],
                         "additionalProperties": false
                       },
-                      "address": {
+                      "payer": {
+                        "type": "object",
+                        "properties": {
+                          "lock": {
+                            "type": "object",
+                            "properties": {
+                              "codeHash": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-fA-F]{64}$"
+                              },
+                              "hashType": {
+                                "type": "string",
+                                "enum": [
+                                  "type",
+                                  "data",
+                                  "data1",
+                                  "data2"
+                                ]
+                              },
+                              "args": {
+                                "type": "string",
+                                "pattern": "^0x([0-9a-fA-F]{2})*$"
+                              }
+                            },
+                            "required": [
+                              "codeHash",
+                              "hashType",
+                              "args"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "address": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "prev_tx_hash": {
                         "type": "string",
-                        "minLength": 1
+                        "pattern": "^0x[0-9a-fA-F]{64}$"
                       }
                     },
+                    "required": [
+                      "manifest",
+                      "payer"
+                    ],
                     "additionalProperties": false
-                  },
-                  "prev_tx_hash": {
-                    "type": "string",
-                    "pattern": "^0x[0-9a-fA-F]{64}$"
                   }
-                },
-                "required": [
-                  "manifest",
-                  "payer"
-                ],
-                "additionalProperties": false
+                ]
               }
             }
           }
@@ -1013,7 +850,7 @@
     },
     "/proofs/submit": {
       "post": {
-        "summary": "Broadcast a signed anchor transaction",
+        "summary": "Broadcast a signed anchor or withdraw transaction",
         "tags": [
           "proofs"
         ],
@@ -1031,203 +868,6 @@
             }
           }
         },
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/proofs": {
-      "post": {
-        "summary": "Custodial anchor: the service wallet funds, signs and broadcasts",
-        "tags": [
-          "proofs"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
-                    "type": "object",
-                    "properties": {
-                      "title": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
-                      },
-                      "declared_author": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    },
-                    "required": [
-                      "title",
-                      "files",
-                      "declared_author"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "manifest"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/proofs/{unid}/versions": {
-      "post": {
-        "summary": "Custodial new version: consumes the live cell, creates the successor",
-        "tags": [
-          "proofs"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "manifest": {
-                    "type": "object",
-                    "properties": {
-                      "title": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "created": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "format": "uri"
-                      },
-                      "files": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "p": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "h": {
-                              "type": "string",
-                              "pattern": "^[0-9a-f]{64}$"
-                            }
-                          },
-                          "required": [
-                            "p",
-                            "h"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "minItems": 1
-                      },
-                      "compact": {
-                        "type": "boolean"
-                      },
-                      "declared_author": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    },
-                    "required": [
-                      "title",
-                      "files",
-                      "declared_author"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "manifest"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "unid",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      }
-    },
-    "/proofs/{unid}": {
-      "delete": {
-        "summary": "Custodial withdraw: consumes the live cell, no successor",
-        "tags": [
-          "proofs"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "unid",
-            "required": true
-          }
-        ],
         "responses": {
           "200": {
             "description": "Default Response"
@@ -1335,7 +975,7 @@
     },
     {
       "name": "proofs",
-      "description": "Authenticated anchoring (non-custodial and custodial)"
+      "description": "Authenticated anchoring and withdrawal (non-custodial)"
     },
     {
       "name": "keys",

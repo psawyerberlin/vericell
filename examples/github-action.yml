@@ -6,20 +6,15 @@
 #
 #   vericell hash ./dist --out manifest.json
 #   vericell anchor manifest.json --api <url> --key $VERICELL_API_KEY \
-#     --mode non-custodial --signer-key-file ./ci-ckb-key
+#     --signer-key-file ./ci-ckb-key
 #
 # Required repository secrets:
 #   VERICELL_API_KEY     — bearer key from `POST /api/v1/keys` (admin-minted)
 #   VERICELL_SIGNER_KEY  — 0x-prefixed CCC private key for a funded CKB
-#                          account; non-custodial mode means this key signs
-#                          locally in the runner and is never sent to the API
+#                          account; this key signs locally in the runner and
+#                          is never sent to the API
 # Required repository variable:
 #   VERICELL_API_URL     — e.g. https://api.vericell.example/api/v1
-#
-# `--mode non-custodial` is the default recommendation (TECHNICAL.md §9); to
-# use the custodial service wallet instead, drop --signer-key-file and the
-# key-file steps below, switch to `--mode custodial`, and add
-# `declared_author` to manifest.json before anchoring.
 
 name: VeriCell anchor
 
@@ -60,7 +55,6 @@ jobs:
           vericell anchor manifest.json \
             --api "$VERICELL_API_URL" \
             --key "$VERICELL_API_KEY" \
-            --mode non-custodial \
             --signer-key-file ./ci-ckb-key
 
       - name: Remove the signer key

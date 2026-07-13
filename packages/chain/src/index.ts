@@ -32,7 +32,7 @@ export {
 export { PURE_CAPACITY_FILTER } from "./filters.js";
 export { DEFAULT_FEE_RATE } from "./constants.js";
 // Exported (Phase 5) so `api`'s route-level unit tests can exercise
-// prepare/submit/custodial flows without a real offckb devnet — see this
+// prepare/submit flows without a real offckb devnet — see this
 // package's DECISIONS.md.
 export { FakeClient } from "./fakeClient.js";
 

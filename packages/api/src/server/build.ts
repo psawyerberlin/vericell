@@ -26,13 +26,7 @@ import {
   type FetchProofFn,
   type GetTipFn,
 } from "./chainLookup.js";
-import {
-  makeDefaultGetChainClient,
-  makeDefaultGetCustodialSigner,
-  resolveCustodialEnabled,
-  type GetChainClientFn,
-  type GetCustodialSignerFn,
-} from "./chainClient.js";
+import { makeDefaultGetChainClient, type GetChainClientFn } from "./chainClient.js";
 import { perKeyRateLimitOptions } from "./auth.js";
 import { problemBody, ProblemError } from "./errors.js";
 import { registerHashRoutes } from "./routes/hashes.js";
@@ -66,10 +60,6 @@ export interface NetworkBinding {
   getTip?: GetTipFn;
   /** Raw chain client for `/proofs*` (tx building, broadcast) — defaults to a lazily-built real `chain.makeClient(network)`, injectable so tests never need a live connection. */
   chainClient?: GetChainClientFn;
-  /** Feature flag for this network's custodial `/proofs*` routes (TECHNICAL.md §7.2-B). Defaults to `resolveCustodialEnabled(network)` — gated on mainnet by `MAINNET_CONFIRM`. */
-  custodialEnabled?: boolean;
-  /** Lazily-connected service-wallet signer for custodial mode on this network. Defaults to a `SignerCkbPrivateKey` built from `SERVICE_PRIVATE_KEY`. */
-  custodialSigner?: GetCustodialSignerFn;
 }
 
 export interface BuildServerOptions {
@@ -81,8 +71,6 @@ export interface BuildServerOptions {
   fetchProof?: FetchProofFn;
   getTip?: GetTipFn;
   chainClient?: GetChainClientFn;
-  custodialEnabled?: boolean;
-  custodialSigner?: GetCustodialSignerFn;
 
   /**
    * Phase 10a: additional network-scoped bindings. Every network present
@@ -207,8 +195,6 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
       fetchProof: opts.fetchProof,
       getTip: opts.getTip,
       chainClient: opts.chainClient,
-      custodialEnabled: opts.custodialEnabled,
-      custodialSigner: opts.custodialSigner,
     };
   }
   const defaultBinding = networks[defaultNetwork];
@@ -236,7 +222,7 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
         title: "VeriCell API",
         description:
           "Proof of authorship, integrity and time for any digital project, anchored on Nervos CKB. Public read-only endpoints — see TECHNICAL.md §7.1.",
-        version: "1.0.0",
+        version: "1.1.0",
       },
       // Phase 10a: every network is mounted at its own /api/v1/<network>/...
       // tree; the un-prefixed entry documents the alias every route is also
@@ -271,7 +257,7 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
         { name: "versions", description: "Individual on-chain proof versions" },
         { name: "hashes", description: "Backward hash search and verification" },
         { name: "meta", description: "Service health and statistics" },
-        { name: "proofs", description: "Authenticated anchoring (non-custodial and custodial)" },
+        { name: "proofs", description: "Authenticated anchoring and withdrawal (non-custodial)" },
         { name: "keys", description: "API key management" },
         { name: "webhooks", description: "Event delivery for committed/consumed/superseded" },
       ],
@@ -319,14 +305,6 @@ export function buildServer(opts: BuildServerOptions): TypedApp {
     scope.decorate("fetchProofFromChain", binding.fetchProof ?? makeDefaultFetchProof(network));
     scope.decorate("getChainTip", binding.getTip ?? makeDefaultGetTip(network));
     scope.decorate("getChainClient", binding.chainClient ?? makeDefaultGetChainClient(network));
-    scope.decorate(
-      "custodialEnabled",
-      binding.custodialEnabled ?? resolveCustodialEnabled(network),
-    );
-    scope.decorate(
-      "getCustodialSigner",
-      binding.custodialSigner ?? makeDefaultGetCustodialSigner(network),
-    );
     // Only the network-less alias scope (and, for a consistent top-level
     // `app`, its own mirror of it) gets to see every network's bindings —
     // the prefixed `/api/v1/<network>/...` scopes report only their own

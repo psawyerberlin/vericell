@@ -46,12 +46,8 @@ export {
 export { withIdempotency } from "./server/idempotency.js";
 export {
   defaultGetChainClient,
-  defaultGetCustodialSigner,
   makeDefaultGetChainClient,
-  makeDefaultGetCustodialSigner,
-  resolveCustodialEnabled,
   type GetChainClientFn,
-  type GetCustodialSignerFn,
 } from "./server/chainClient.js";
 export { WEBHOOK_EVENTS, type WebhookEvent, type WebhookEventPayload } from "./webhooks/types.js";
 export { enqueueWebhookDeliveries } from "./webhooks/dispatch.js";

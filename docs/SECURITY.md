@@ -6,6 +6,10 @@ change needed), **Fixed** (a gap found and closed in this phase — see the link
 **Accepted trade-off** (a real property worth naming, deliberately not changed, with the
 reasoning recorded here rather than left implicit).
 
+> Updated for v1.1.0: custodial anchoring was removed entirely (see §6 and
+> `docs/DECISIONS.md`); every other section below still describes the current, non-custodial-only
+> state of the repo.
+
 ## 1. Key handling
 
 - **API keys** (`packages/api/src/server/auth.ts`): minted as `vk_` + 32 random bytes
@@ -24,20 +28,15 @@ reasoning recorded here rather than left implicit).
   is not a new class of exposure — `webhooks.secret` is already stored in cleartext by deliberate
   design (`docs/DECISIONS.md`, Phase 6), so the DB file already has to be treated as
   secret-bearing, not just key-hash-bearing. Anyone who can read `idempotency_keys` already has
-  filesystem access to the SQLite file, at which point `webhooks.secret` and the `SERVICE_PRIVATE_KEY`-adjacent
-  deployment secrets are equally exposed. Mitigation for operators: restrict the DB file's OS
+  filesystem access to the SQLite file, at which point `webhooks.secret` and other deployment
+  secrets are equally exposed. Mitigation for operators: restrict the DB file's OS
   permissions to the API/indexer process user (Phase 10's Docker image should run as non-root with
   a private volume), and treat `/keys` retries as rare/manual rather than an automated hot path.
-- **`SERVICE_PRIVATE_KEY` (custodial service wallet)**: read once from env by
-  `defaultGetCustodialSigner` (`server/chainClient.ts`), never logged, never echoed in any
-  response, cached only as a connected in-memory `ccc.SignerCkbPrivateKey` — never round-tripped
-  through the DB or a log line. **Pass.**
-- **CLI signer keys never leave the client.** `vericell anchor --mode non-custodial` /
-  `vericell withdraw --mode non-custodial` read the key only from `--signer-key-file` (a local
-  file path, never a CLI argument — so it never appears in `ps`/shell history the way `--key`
-  necessarily does), sign in-process, and only the *signed transaction* crosses the network to
-  `/proofs/submit` or straight to the chain RPC. `packages/cli/src/lib/signer.ts` never logs the
-  key content; none of the command modules print it. **Pass.**
+- **CLI signer keys never leave the client.** `vericell anchor` / `vericell withdraw` read the
+  key only from `--signer-key-file` (a local file path, never a CLI argument — so it never appears
+  in `ps`/shell history the way `--key` necessarily does), sign in-process, and only the *signed
+  transaction* crosses the network to `/proofs/submit`. `packages/cli/src/lib/signer.ts` never
+  logs the key content; none of the command modules print it. **Pass.**
 - **`--key <api-key>` is a CLI argument, not an env var**, so it is visible to other processes on
   the same host via `ps`/`/proc/<pid>/cmdline` for the duration of the command, and lands in shell
   history unless the user takes precautions. This matches `ClaudeCodeInstruction.md`'s Phase 8
@@ -77,11 +76,8 @@ Every route with a body, params, or querystring validates through a zod schema
 | `GET /hashes/{sha256}` | `Sha256Params` |
 | `GET /verify/{sha256}` | `Sha256Params` |
 | `POST /keys` | `CreateKeyBodySchema` |
-| `POST /proofs/prepare` | `PrepareBodySchema` (→ `ManifestDraftSchema`, `PayerSchema`) |
+| `POST /proofs/prepare` | `PrepareBodySchema` (anchor: `ManifestDraftSchema` + `PayerSchema`; withdraw: `withdraw_tx_hash`) |
 | `POST /proofs/submit` | `SubmitBodySchema` |
-| `POST /proofs` | `CustodialAnchorBodySchema` |
-| `POST /proofs/{unid}/versions` | `UnidParams` + `CustodialAnchorBodySchema` |
-| `DELETE /proofs/{unid}` | `UnidParams` |
 | `POST /webhooks` | `RegisterWebhookBodySchema` |
 | `DELETE /webhooks/{id}` | `WebhookIdParams` |
 
@@ -120,29 +116,19 @@ followed — a receiver that legitimately moves must be re-registered at its new
 `webhooks/deliver.test.ts`'s new "does not follow a redirect response (SSRF-via-redirect guard)"
 case, using a local receiver that 302s to `127.0.0.1:1`.
 
-## 6. Custodial-mode warnings
+## 6. Server-held signing keys (N/A)
 
-- Every custodial response (`POST /proofs`, `POST /proofs/{unid}/versions`, `DELETE /proofs/{unid}`)
-  echoes `CUSTODIAL_TRADEOFF_NOTE` in its body — the ownership caveat from TECHNICAL.md §7.2-B/§9,
-  restated to the caller on every single call rather than only in docs. **Pass.**
-- Custodial anchors require `manifest.declared_author` (`CustodialManifestDraftSchema`), enforced
-  server-side, not just documented. **Pass.**
-- `CUSTODIAL_ENABLED` defaults off (`.env.example`, `resolveCustodialEnabled`). **Pass.**
+VeriCell v1.1.0 removed the server-signed anchoring path entirely — every anchor and withdraw is
+now non-custodial (prepare/sign/submit), so the API never holds a signing key at all and every
+proof cell's lock is the caller's own wallet. See `docs/DECISIONS.md`'s "custodial mode removal"
+entry for the rationale; this section's original findings no longer apply. **N/A.**
 
 ## 7. Mainnet guards
 
-- **Custodial mode refuses to start on mainnet without `MAINNET_CONFIRM=1`**
-  (`resolveCustodialEnabled`, `server/chainClient.ts`) — logs a warning and leaves
-  `custodialEnabled` false rather than crashing the whole server over a custodial-only
-  misconfiguration. **Pass.**
-- **Fixed — missing general mainnet-startup warning.** The global rule ("On mainnet startup, the
-  API logs a prominent warning...") is two separate requirements: the custodial refusal above, and
-  an unconditional warning on every mainnet startup regardless of custodial mode. Only the former
-  existed; `server/run.ts` and `indexer/run.ts` logged network/port at `info` level with nothing
-  mainnet-specific. Added `packages/api/src/mainnetWarning.ts`'s `warnIfMainnet`, called from both
-  entrypoints right after the logger is constructed, so a process that's accidentally pointed at
-  `VERICELL_NETWORK=mainnet` — API or indexer, custodial or not — logs a loud, unmissable `warn`
-  before doing anything else. Covered by `mainnetWarning.test.ts`.
+- **Every mainnet startup logs a prominent warning** (`packages/api/src/mainnetWarning.ts`'s
+  `warnIfMainnet`, called from both `server/run.ts` and `indexer/run.ts` right after the logger is
+  constructed), so a process accidentally pointed at `VERICELL_NETWORK=mainnet` logs a loud,
+  unmissable `warn` before doing anything else. Covered by `mainnetWarning.test.ts`. **Pass.**
 - **DB is network-scoped** (`vericell.<network>.sqlite` via `resolveDbPath`), so a testnet index
   can never be accidentally served as mainnet data or vice versa. **Pass.**
 - **`/health`, `/stats` and CLI output all report the active network** (`app.network`,

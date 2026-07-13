@@ -10,10 +10,7 @@
  *      `offckb system-scripts --export-style ccc --network devnet` output.
  *   4. `OFFCKB=1 pnpm --filter api test` (or `pnpm --filter api test:offckb`)
  *
- * Skipped entirely unless `OFFCKB=1`. The suite's own service wallet reuses
- * the same funded devnet account as the non-custodial payer (only one is
- * available in this environment) — the two roles are still exercised
- * through entirely separate code paths (payer-signed vs. server-signed).
+ * Skipped entirely unless `OFFCKB=1`.
  *
  * This suite and `../indexer/offckb.integration.test.ts` run as separate
  * vitest files in the same `test:offckb` invocation; the api package's
@@ -88,8 +85,6 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
       network: "devnet",
       chainClient: () => client,
       adminToken: ADMIN_TOKEN,
-      custodialEnabled: true,
-      custodialSigner: async () => signer,
       rateLimit: { max: 1000, timeWindow: "1 minute" },
     });
 
@@ -97,11 +92,10 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     indexer = new Indexer({ db, client, startBlock });
   }, 60000);
 
-  async function manifestDraft(title: string, fileTag: string, extra?: Record<string, unknown>) {
+  async function manifestDraft(title: string, fileTag: string) {
     return {
       title,
       files: [{ p: "file.txt", h: await sha256Hex(new TextEncoder().encode(fileTag)) }],
-      ...extra,
     };
   }
 
@@ -213,45 +207,69 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
     await client.waitTransaction(first.json().tx_hash);
   }, 180000);
 
-  it("custodial: anchor, new version, withdraw", async () => {
-    const anchorRes = await app.inject({
-      method: "POST",
-      url: "/api/v1/proofs",
-      headers: authHeaders,
-      payload: {
-        manifest: await manifestDraft(`Phase5 Custodial ${runTag}`, `${runTag}:cust1`, {
-          declared_author: "phase5-offckb-suite",
-        }),
-      },
-    });
-    expect(anchorRes.statusCode).toBe(202);
-    const anchorBody = anchorRes.json();
-    expect(anchorBody.note).toMatch(/custodial/i);
-    await client.waitTransaction(anchorBody.tx_hash);
+  it("non-custodial: anchor, new version, then withdraw — all via prepare -> sign -> submit", async () => {
+    const draft = await manifestDraft(`Phase5 Chain ${runTag}`, `${runTag}:chain1`);
 
-    const versionRes = await app.inject({
+    const prepareRes = await app.inject({
       method: "POST",
-      url: `/api/v1/proofs/${anchorBody.unid}/versions`,
+      url: "/api/v1/proofs/prepare",
       headers: authHeaders,
-      payload: {
-        manifest: await manifestDraft(`Phase5 Custodial v2 ${runTag}`, `${runTag}:cust2`, {
-          declared_author: "phase5-offckb-suite",
-        }),
-      },
+      payload: { manifest: draft, payer: { lock } },
     });
-    expect(versionRes.statusCode).toBe(202);
-    const versionBody = versionRes.json();
-    expect(versionBody.unid).toBe(anchorBody.unid);
-    expect(versionBody.tx_hash).not.toBe(anchorBody.tx_hash);
-    await client.waitTransaction(versionBody.tx_hash);
+    expect(prepareRes.statusCode).toBe(200);
+    const prepared = prepareRes.json();
+    const signedTx = await signer.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: authHeaders,
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) as unknown },
+    });
+    expect(submitRes.statusCode).toBe(202);
+    const { tx_hash: v1TxHash, unid } = submitRes.json();
+    await client.waitTransaction(v1TxHash);
 
-    const withdrawRes = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/proofs/${anchorBody.unid}`,
+    const v2Draft = await manifestDraft(`Phase5 Chain v2 ${runTag}`, `${runTag}:chain2`);
+    const v2PrepareRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
       headers: authHeaders,
+      payload: { manifest: v2Draft, payer: { lock }, prev_tx_hash: v1TxHash },
     });
-    expect(withdrawRes.statusCode).toBe(202);
-    const withdrawBody = withdrawRes.json();
+    expect(v2PrepareRes.statusCode).toBe(200);
+    const v2Prepared = v2PrepareRes.json();
+    const v2SignedTx = await signer.signTransaction(ccc.Transaction.from(v2Prepared.tx));
+    const v2SubmitRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: authHeaders,
+      payload: { tx: JSON.parse(ccc.stringify(v2SignedTx)) as unknown },
+    });
+    expect(v2SubmitRes.statusCode).toBe(202);
+    const v2Body = v2SubmitRes.json();
+    expect(v2Body.unid).toBe(unid);
+    await client.waitTransaction(v2Body.tx_hash);
+
+    const withdrawPrepareRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: authHeaders,
+      payload: { withdraw_tx_hash: v2Body.tx_hash },
+    });
+    expect(withdrawPrepareRes.statusCode).toBe(200);
+    const withdrawPrepared = withdrawPrepareRes.json();
+    expect(BigInt(withdrawPrepared.refund_capacity)).toBeGreaterThan(0n);
+    const withdrawSignedTx = await signer.signTransaction(
+      ccc.Transaction.from(withdrawPrepared.tx),
+    );
+    const withdrawSubmitRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: authHeaders,
+      payload: { tx: JSON.parse(ccc.stringify(withdrawSignedTx)) as unknown },
+    });
+    expect(withdrawSubmitRes.statusCode).toBe(202);
+    const withdrawBody = withdrawSubmitRes.json();
     expect(BigInt(withdrawBody.refund_capacity)).toBeGreaterThan(0n);
     await client.waitTransaction(withdrawBody.tx_hash);
 
@@ -259,7 +277,7 @@ describe.skipIf(!OFFCKB_ENABLED)("write API against offckb devnet", () => {
 
     const projectRow = db
       .prepare("SELECT active, live_tx_hash FROM projects WHERE unid = ?")
-      .get(anchorBody.unid) as { active: number; live_tx_hash: string | null } | undefined;
+      .get(unid) as { active: number; live_tx_hash: string | null } | undefined;
     expect(projectRow?.active).toBe(0);
   }, 300000);
 });

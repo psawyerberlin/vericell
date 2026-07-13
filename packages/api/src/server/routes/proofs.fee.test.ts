@@ -3,6 +3,7 @@ import { ccc, FakeClient, type ProofResult } from "chain";
 import { openDb } from "../../db/open.js";
 import { hashApiKey } from "../auth.js";
 import { buildServer, type TypedApp } from "../build.js";
+import type { FetchProofFn } from "../chainLookup.js";
 
 const PAYER_PRIVATE_KEY = "0x" + "ab".repeat(32);
 const FEE_OWNER_PRIVATE_KEY = "0x" + "ef".repeat(32);
@@ -36,7 +37,7 @@ interface Ctx {
   acpLock: ccc.Script;
 }
 
-async function setup(): Promise<Ctx> {
+async function setup(opts: { fetchProof?: FetchProofFn } = {}): Promise<Ctx> {
   const db = openDb(":memory:");
   db.prepare(
     "INSERT INTO api_keys (key_hash, label, created_at, rate_limit) VALUES (?, ?, ?, ?)",
@@ -74,7 +75,7 @@ async function setup(): Promise<Ctx> {
     db,
     network: "devnet",
     chainClient: () => client,
-    fetchProof: async () => NULL_PROOF,
+    fetchProof: opts.fetchProof ?? (async () => NULL_PROOF),
     rateLimit: { max: 1000, timeWindow: "1 minute" },
   });
 
@@ -195,5 +196,194 @@ describe("service fee wired into /proofs/prepare and /proofs/submit", () => {
     });
     expect(submitRes.statusCode).toBe(202);
     expect(submitRes.json().tx_hash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+});
+
+describe("service fee on the new-version path (prev_tx_hash)", () => {
+  let ctx: Ctx;
+  const originalEnv = process.env[FEE_ENV_VAR];
+  const proofs = new Map<string, ProofResult>();
+
+  beforeEach(async () => {
+    delete process.env[FEE_ENV_VAR];
+    proofs.clear();
+    ctx = await setup({ fetchProof: async (txHash) => proofs.get(String(txHash)) ?? NULL_PROOF });
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env[FEE_ENV_VAR];
+    else process.env[FEE_ENV_VAR] = originalEnv;
+  });
+
+  /** Anchors v1 with no fee due (fee address left unset), then marks it live for `resolvePrevVersion`. */
+  async function anchorV1(): Promise<string> {
+    const prepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: LARGE_MANIFEST_DRAFT, payer: { lock: ctx.payerLock } },
+    });
+    const prepared = prepareRes.json();
+    const signedTx = await ctx.payerSigner.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) },
+    });
+    const txHash = submitRes.json().tx_hash as string;
+    proofs.set(txHash, {
+      manifest: prepared.manifest,
+      live: true,
+      blockNumber: 1n,
+      blockTime: new Date(),
+      ownerAddress: ccc.Address.fromScript(ctx.payerLock, ctx.client).toString(),
+    });
+    return txHash;
+  }
+
+  it("prepare charges 1% and includes a matching ACP top-up leg for a new version too", async () => {
+    const v1TxHash = await anchorV1();
+    process.env[FEE_ENV_VAR] = ctx.feeOwnerAddress;
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: { ...LARGE_MANIFEST_DRAFT, title: "Fee-paying project v2" },
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: v1TxHash,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+
+    const capacity = BigInt(body.capacity);
+    expect(capacity).toBeGreaterThanOrEqual(300n * 100_000_000n);
+    const expectedFee = capacity / 100n;
+    expect(body.cost.fee_configured).toBe(true);
+    expect(body.cost.service_fee).toBe(expectedFee.toString());
+
+    const feeOutputs = body.tx.outputs.filter(
+      (o: { lock: { args: string } }) => o.lock.args === ctx.acpLock.args,
+    );
+    expect(feeOutputs).toHaveLength(1);
+    expect(BigInt(feeOutputs[0].capacity) - ccc.fixedPointFrom(100)).toBe(expectedFee);
+  });
+
+  it("submit rejects a new-version transaction whose fee leg was stripped before signing", async () => {
+    const v1TxHash = await anchorV1();
+
+    // Prepared with the fee address unconfigured, so it never gets the ACP
+    // top-up leg — the same "stripped before signing" shape as the
+    // first-anchor case above, but for the prev_tx_hash path.
+    const strippedRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {
+        manifest: { ...LARGE_MANIFEST_DRAFT, title: "Fee-paying project v2" },
+        payer: { lock: ctx.payerLock },
+        prev_tx_hash: v1TxHash,
+      },
+    });
+    expect(strippedRes.statusCode).toBe(200);
+    process.env[FEE_ENV_VAR] = ctx.feeOwnerAddress;
+
+    const strippedTx = ccc.Transaction.from(strippedRes.json().tx as ccc.TransactionLike);
+    const signedTx = await ctx.payerSigner.signTransaction(strippedTx);
+
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) },
+    });
+
+    expect(submitRes.statusCode).toBe(402);
+    expect(submitRes.json().detail).toMatch(/Service fee not paid/);
+  });
+});
+
+// No API-level "below-threshold anchor" test: a valid VeriCell manifest's
+// mandatory fields (two 64-hex-char hashes, timestamps, `app`/`v`) alone
+// already encode to enough bytes that the resulting cell's *minimum*
+// capacity clears 300 CKB even in compact mode with a 1-char title — CCC's
+// own `CellOutput.from` clamps a cell's capacity up to its occupied size, so
+// there is no way to construct a real, decodable manifest cell below the
+// waiver threshold at all (confirmed empirically; see docs/DECISIONS.md).
+// The waiver boundary itself is proven directly against raw capacity
+// numbers by core's `computeFee` tests and chain's `applyServiceFee`/
+// `verifyServiceFeePaid` tests (`packages/chain/src/fee.test.ts`), which
+// aren't constrained by manifest validity.
+
+describe("withdrawals never carry a service fee", () => {
+  let ctx: Ctx;
+  const originalEnv = process.env[FEE_ENV_VAR];
+  const proofs = new Map<string, ProofResult>();
+
+  beforeEach(async () => {
+    delete process.env[FEE_ENV_VAR];
+    proofs.clear();
+    ctx = await setup({ fetchProof: async (txHash) => proofs.get(String(txHash)) ?? NULL_PROOF });
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env[FEE_ENV_VAR];
+    else process.env[FEE_ENV_VAR] = originalEnv;
+  });
+
+  it("prepare's withdraw tx carries no ACP fee leg, and submit doesn't require one, even with a fee address configured", async () => {
+    const prepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { manifest: LARGE_MANIFEST_DRAFT, payer: { lock: ctx.payerLock } },
+    });
+    const prepared = prepareRes.json();
+    const signedTx = await ctx.payerSigner.signTransaction(ccc.Transaction.from(prepared.tx));
+    const submitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(signedTx)) },
+    });
+    const v1TxHash = submitRes.json().tx_hash as string;
+    proofs.set(v1TxHash, {
+      manifest: prepared.manifest,
+      live: true,
+      blockNumber: 1n,
+      blockTime: new Date(),
+      ownerAddress: ccc.Address.fromScript(ctx.payerLock, ctx.client).toString(),
+    });
+
+    process.env[FEE_ENV_VAR] = ctx.feeOwnerAddress;
+
+    const withdrawPrepareRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/prepare",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { withdraw_tx_hash: v1TxHash },
+    });
+    expect(withdrawPrepareRes.statusCode).toBe(200);
+    const withdrawPrepared = withdrawPrepareRes.json();
+    expect(
+      withdrawPrepared.tx.outputs.every(
+        (o: { lock: { args: string } }) => o.lock.args !== ctx.acpLock.args,
+      ),
+    ).toBe(true);
+    expect(withdrawPrepared.cost).toBeUndefined();
+
+    const withdrawSignedTx = await ctx.payerSigner.signTransaction(
+      ccc.Transaction.from(withdrawPrepared.tx),
+    );
+    const withdrawSubmitRes = await ctx.app.inject({
+      method: "POST",
+      url: "/api/v1/proofs/submit",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: { tx: JSON.parse(ccc.stringify(withdrawSignedTx)) },
+    });
+    expect(withdrawSubmitRes.statusCode).toBe(202);
   });
 });

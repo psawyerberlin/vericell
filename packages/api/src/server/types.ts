@@ -2,7 +2,7 @@ import "fastify";
 import type Database from "better-sqlite3";
 import type { Network } from "core";
 import type { FetchProofFn, GetTipFn } from "./chainLookup.js";
-import type { GetChainClientFn, GetCustodialSignerFn } from "./chainClient.js";
+import type { GetChainClientFn } from "./chainClient.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -13,8 +13,6 @@ declare module "fastify" {
     getChainClient: GetChainClientFn;
     /** `undefined` when ADMIN_TOKEN isn't configured — `POST /keys` 500s rather than accepting any caller. */
     adminToken: string | undefined;
-    custodialEnabled: boolean;
-    getCustodialSigner: GetCustodialSignerFn;
     /**
      * Only decorated on the network-less alias scope (`/api/v1/...`,
      * Phase 10a) — every configured network's db + tip lookup, so `/health`

@@ -68,9 +68,6 @@ Edit `.env`:
   `/api/*` to the `api` service; use `http://<server-ip>` if testing over
   plain HTTP before DNS is live.
 - `ADMIN_TOKEN` — generate one: `openssl rand -hex 32`.
-- Leave `CUSTODIAL_ENABLED` unset (production default: off) unless you
-  specifically want the CI-convenience custodial flow — see TECHNICAL.md
-  §7.2-B/§9 for the ownership trade-off it carries.
 - Leave `VERICELL_RPC_URL` unset to use CKB's public endpoints (the
   production default) unless you're running your own node.
 - `INDEXER_START_BLOCK_TESTNET` / `INDEXER_START_BLOCK_MAINNET` — set these
@@ -87,7 +84,7 @@ Skip this section entirely if you don't want to charge the service fee —
 every fee variable left unset (the `.env.example` default) means
 `packages/core`'s `getFeeAddress` returns `undefined` and the fee logic never
 runs: no ACP lookups, no fee leg on any transaction, nothing for
-`POST /proofs/submit` to enforce (TECHNICAL.md §7.2-C).
+`POST /proofs/submit` to enforce (TECHNICAL.md §7.2-B).
 
 The fee is collected by topping up a small pool of pre-funded ACP
 (anyone-can-pay) cells you own — a capacity *increase* at an ACP lock needs no

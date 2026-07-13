@@ -4,7 +4,7 @@ import {
   buildWithdrawTx,
   ccc,
   verifyServiceFeePaid,
-  withFeeCellRetry,
+  type ProofResult,
 } from "chain";
 import {
   costBreakdown,
@@ -17,30 +17,16 @@ import { requireApiKey } from "../auth.js";
 import {
   BadGatewayError,
   ConflictError,
-  ForbiddenError,
   NotFoundError,
   PaymentRequiredError,
   ProblemError,
 } from "../errors.js";
 import { withIdempotency } from "../idempotency.js";
 import { buildFullManifest, manifestBytes } from "../manifestDraft.js";
-import { getProjectDetail } from "../queries.js";
-import { UnidParams } from "../schemas.js";
 import { txFromJson, txToJson } from "../txJson.js";
-import {
-  CustodialAnchorBodySchema,
-  PrepareBodySchema,
-  SubmitBodySchema,
-  type ManifestDraft,
-} from "../writeSchemas.js";
+import { PrepareBodySchema, SubmitBodySchema, type ManifestDraft } from "../writeSchemas.js";
 import { insertPendingVersion, markProjectWithdrawnPending } from "../writeQueries.js";
 import type { TypedApp } from "../build.js";
-
-const CUSTODIAL_TRADEOFF_NOTE =
-  "Custodial mode: this proof cell is locked to VeriCell's service wallet, not your own key. " +
-  "Authorship is asserted only via manifest.declared_author (no detached signature verification " +
-  "yet) — see TECHNICAL.md §7.2-B and §9. This weakens the on-chain ownership property described " +
-  "there; prefer non-custodial (POST /proofs/prepare + POST /proofs/submit) when self-custody matters.";
 
 async function resolvePayerLock(
   client: ccc.Client,
@@ -56,42 +42,44 @@ function ownerAddressOf(lock: ccc.ScriptLike, addressPrefix: string): string {
   return new ccc.Address(ccc.Script.from(lock), addressPrefix).toString();
 }
 
-function requireCustodialEnabled(app: TypedApp): void {
-  if (!app.custodialEnabled) {
-    throw new ForbiddenError(
-      "Custodial mode is disabled on this server (CUSTODIAL_ENABLED not set)",
+/**
+ * Resolves a live proof cell by its creating tx hash: validates it's still
+ * live and returns both the chain-derived proof and its actual on-chain
+ * cell. Shared by `prepare`'s "new version" (`prev_tx_hash`) and "withdraw"
+ * (`withdraw_tx_hash`) branches — both need the same live/not-found/dead
+ * checks before building against it.
+ */
+async function resolveLiveProofCell(
+  app: TypedApp,
+  client: ccc.Client,
+  txHash: string,
+): Promise<{ proof: ProofResult; cell: ccc.Cell }> {
+  const proof = await app.fetchProofFromChain(txHash);
+  if (!proof.manifest) {
+    throw new NotFoundError(`No proof found for tx hash "${txHash}"`);
+  }
+  if (proof.live !== true) {
+    throw new ConflictError(
+      `tx hash "${txHash}" is not a live proof cell (already superseded or withdrawn)`,
     );
   }
+  const cell = await client.getCell({ txHash, index: 0 });
+  if (!cell) {
+    throw new NotFoundError(`Could not locate the live cell for "${txHash}"`);
+  }
+  return { proof, cell };
 }
 
-/**
- * Resolves the previous version's on-chain cell for a new-version anchor:
- * validates it's still live, and returns the `genesis`/`prevOutPoint`/
- * `prevTypeScript` a builder needs. Shared by the non-custodial `prepare`
- * and custodial `.../versions` routes.
- */
 async function resolvePrevVersion(
   app: TypedApp,
   client: ccc.Client,
   prevTxHash: string,
 ): Promise<{ genesis: string; prevOutPoint: ccc.OutPointLike; prevTypeScript?: ccc.ScriptLike }> {
-  const prevProof = await app.fetchProofFromChain(prevTxHash);
-  if (!prevProof.manifest) {
-    throw new NotFoundError(`No proof found for prev_tx_hash "${prevTxHash}"`);
-  }
-  if (prevProof.live !== true) {
-    throw new ConflictError(
-      `prev_tx_hash "${prevTxHash}" is not a live proof cell (already superseded or withdrawn)`,
-    );
-  }
-  const prevCell = await client.getCell({ txHash: prevTxHash, index: 0 });
-  if (!prevCell) {
-    throw new NotFoundError(`Could not locate the live cell for "${prevTxHash}"`);
-  }
+  const { proof, cell } = await resolveLiveProofCell(app, client, prevTxHash);
   return {
-    genesis: prevProof.manifest.genesis ?? prevTxHash,
-    prevOutPoint: prevCell.outPoint,
-    prevTypeScript: prevCell.cellOutput.type ?? undefined,
+    genesis: proof.manifest!.genesis ?? prevTxHash,
+    prevOutPoint: cell.outPoint,
+    prevTypeScript: cell.cellOutput.type ?? undefined,
   };
 }
 
@@ -155,15 +143,150 @@ function deriveUnid(output0: ccc.CellOutput, manifest: Manifest, txHash: string)
   return output0.type ? output0.type.args : (manifest.genesis ?? txHash);
 }
 
+/** Same idea as {@link deriveUnid}, but for the cell being *consumed* (withdraw) rather than created. */
+function deriveUnidFromCell(cell: ccc.Cell, manifest: Manifest): string {
+  return cell.cellOutput.type
+    ? cell.cellOutput.type.args
+    : (manifest.genesis ?? cell.outPoint.txHash);
+}
+
+async function prepareWithdraw(
+  app: TypedApp,
+  client: ccc.Client,
+  withdrawTxHash: string,
+): Promise<{ status: number; body: unknown }> {
+  const { cell } = await resolveLiveProofCell(app, client, withdrawTxHash);
+  // Withdrawing creates no new proof cell, so it carries no service fee
+  // (TECHNICAL.md §7.2-B) — buildWithdrawTx never touches the fee pool.
+  const tx = await buildWithdrawTx({ client, lock: cell.cellOutput.lock, outPoint: cell.outPoint });
+  return {
+    status: 200,
+    body: {
+      tx: txToJson(tx),
+      refund_capacity: tx.outputs[0]!.capacity.toString(),
+    },
+  };
+}
+
+/**
+ * Submit-side counterpart of an anchor transaction (a brand-new project or a
+ * new version): output 0 carries manifest bytes. Verifies the service fee
+ * was paid, broadcasts, and records a `pending` version.
+ */
+async function submitAnchor(
+  app: TypedApp,
+  client: ccc.Client,
+  tx: ccc.Transaction,
+  output0: ccc.CellOutput,
+  data0: ccc.HexLike,
+): Promise<{ status: number; body: unknown }> {
+  let manifest: Manifest;
+  try {
+    manifest = decodeManifest(ccc.bytesFrom(data0));
+  } catch (err) {
+    throw new ProblemError(
+      400,
+      "Bad Request",
+      `Output 0 data is not a valid VeriCell manifest: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const feeCheck = await verifyServiceFeePaid(client, tx, app.network);
+  if (!feeCheck.ok) {
+    throw new PaymentRequiredError(
+      `Service fee not paid: this anchor's locked capacity requires ${feeCheck.due} shannons ` +
+        `to the configured fee address, but the transaction only pays it ${feeCheck.paid} — ` +
+        `the fee leg from /proofs/prepare must not be removed or altered before signing.`,
+    );
+  }
+
+  let txHash: string;
+  try {
+    txHash = await client.sendTransaction(tx);
+  } catch (err) {
+    throw new BadGatewayError(
+      `Broadcast failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const unid = deriveUnid(output0, manifest, txHash);
+  insertPendingVersion(app.db, {
+    txHash,
+    unid,
+    manifest,
+    ownerAddress: ownerAddressOf(output0.lock, client.addressPrefix),
+  });
+
+  return { status: 202, body: { tx_hash: txHash, unid } };
+}
+
+/**
+ * Submit-side counterpart of a withdraw transaction: no manifest output,
+ * just a single input consuming the live proof cell. No service fee to
+ * verify — withdrawing creates no new proof cell.
+ */
+async function submitWithdraw(
+  app: TypedApp,
+  client: ccc.Client,
+  tx: ccc.Transaction,
+): Promise<{ status: number; body: unknown }> {
+  if (tx.inputs.length !== 1) {
+    throw new ProblemError(
+      400,
+      "Bad Request",
+      "A withdraw transaction must consume exactly one input (the live proof cell) and carry no manifest output.",
+    );
+  }
+  const prevOutPoint = tx.inputs[0]!.previousOutput;
+  const prevCell = await client.getCell(prevOutPoint);
+  if (!prevCell) {
+    throw new NotFoundError(
+      `Could not locate the cell being withdrawn (${prevOutPoint.txHash}#${prevOutPoint.index})`,
+    );
+  }
+  const prevProof = await app.fetchProofFromChain(prevOutPoint.txHash);
+  if (!prevProof.manifest) {
+    throw new ProblemError(
+      400,
+      "Bad Request",
+      "The input being consumed is not a VeriCell proof cell.",
+    );
+  }
+
+  let txHash: string;
+  try {
+    txHash = await client.sendTransaction(tx);
+  } catch (err) {
+    throw new BadGatewayError(
+      `Broadcast failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const unid = deriveUnidFromCell(prevCell, prevProof.manifest);
+  markProjectWithdrawnPending(app.db, unid);
+
+  return {
+    status: 202,
+    body: {
+      tx_hash: txHash,
+      unid,
+      refund_capacity: tx.outputs[0]?.capacity.toString() ?? "0",
+    },
+  };
+}
+
 export function registerProofRoutes(app: TypedApp): void {
-  // --- Non-custodial: the API prepares, the client signs. ---------------
+  // Non-custodial: the API prepares, the client signs. Covers all three
+  // transaction shapes — first anchor, new version (prev_tx_hash), and
+  // withdraw (withdraw_tx_hash) — the client always signs and broadcasts
+  // itself via /proofs/submit.
 
   app.post(
     "/proofs/prepare",
     {
       schema: {
         tags: ["proofs"],
-        summary: "Build an unsigned anchor transaction for the caller to sign locally",
+        summary: "Build an unsigned anchor or withdraw transaction for the caller to sign locally",
         body: PrepareBodySchema,
       },
       preHandler: requireApiKey(app),
@@ -171,8 +294,13 @@ export function registerProofRoutes(app: TypedApp): void {
     async (req, reply) => {
       const apiKeyHash = req.apiKeyHash!;
       return withIdempotency(app.db, req, reply, apiKeyHash, async () => {
-        const { manifest: draft, payer, prev_tx_hash } = req.body;
         const client = app.getChainClient();
+
+        if ("withdraw_tx_hash" in req.body) {
+          return prepareWithdraw(app, client, req.body.withdraw_tx_hash);
+        }
+
+        const { manifest: draft, payer, prev_tx_hash } = req.body;
         const lock = await resolvePayerLock(client, payer);
 
         const prev = prev_tx_hash ? await resolvePrevVersion(app, client, prev_tx_hash) : undefined;
@@ -204,7 +332,7 @@ export function registerProofRoutes(app: TypedApp): void {
     {
       schema: {
         tags: ["proofs"],
-        summary: "Broadcast a signed anchor transaction",
+        summary: "Broadcast a signed anchor or withdraw transaction",
         body: SubmitBodySchema,
       },
       preHandler: requireApiKey(app),
@@ -213,237 +341,19 @@ export function registerProofRoutes(app: TypedApp): void {
       const apiKeyHash = req.apiKeyHash!;
       return withIdempotency(app.db, req, reply, apiKeyHash, async () => {
         const tx = txFromJson(req.body.tx);
+        const client = app.getChainClient();
 
         const output0 = tx.outputs[0];
         const data0 = tx.outputsData[0];
-        if (!output0 || data0 === undefined) {
-          throw new ProblemError(400, "Bad Request", "Transaction has no output at index 0");
+        // An anchor tx's output 0 always carries manifest bytes; a withdraw
+        // tx is a plain capacity refund with no such output — this is the
+        // same "does the data look like a manifest" signal the indexer
+        // itself uses to detect VeriCell cells (indexer/detect.ts).
+        if (!output0 || data0 === undefined || ccc.bytesFrom(data0).length === 0) {
+          return submitWithdraw(app, client, tx);
         }
 
-        let manifest: Manifest;
-        try {
-          manifest = decodeManifest(ccc.bytesFrom(data0));
-        } catch (err) {
-          throw new ProblemError(
-            400,
-            "Bad Request",
-            `Output 0 data is not a valid VeriCell manifest: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-
-        const client = app.getChainClient();
-
-        const feeCheck = await verifyServiceFeePaid(client, tx, app.network);
-        if (!feeCheck.ok) {
-          throw new PaymentRequiredError(
-            `Service fee not paid: this anchor's locked capacity requires ${feeCheck.due} shannons ` +
-              `to the configured fee address, but the transaction only pays it ${feeCheck.paid} — ` +
-              `the fee leg from /proofs/prepare must not be removed or altered before signing.`,
-          );
-        }
-
-        let txHash: string;
-        try {
-          txHash = await client.sendTransaction(tx);
-        } catch (err) {
-          throw new BadGatewayError(
-            `Broadcast failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-
-        const unid = deriveUnid(output0, manifest, txHash);
-        insertPendingVersion(app.db, {
-          txHash,
-          unid,
-          manifest,
-          ownerAddress: ownerAddressOf(output0.lock, client.addressPrefix),
-        });
-
-        return { status: 202, body: { tx_hash: txHash, unid } };
-      });
-    },
-  );
-
-  // --- Custodial: the API signs with a server-held service wallet. ------
-
-  app.post(
-    "/proofs",
-    {
-      schema: {
-        tags: ["proofs"],
-        summary: "Custodial anchor: the service wallet funds, signs and broadcasts",
-        body: CustodialAnchorBodySchema,
-      },
-      preHandler: requireApiKey(app),
-    },
-    async (req, reply) => {
-      requireCustodialEnabled(app);
-      const apiKeyHash = req.apiKeyHash!;
-      return withIdempotency(app.db, req, reply, apiKeyHash, async () => {
-        const client = app.getChainClient();
-        const signer = await app.getCustodialSigner();
-        const lock = (await signer.getRecommendedAddressObj()).script;
-
-        const manifest = await buildFullManifest(req.body.manifest as ManifestDraft);
-        const bytes = manifestBytes(manifest);
-
-        // Rebuilds the whole transaction (picking a fresh pool cell each
-        // time) on fee-cell contention — see chain's withFeeCellRetry.
-        const { tx, txHash } = await withFeeCellRetry(async () => {
-          const builtTx = await buildAnchor(client, lock, bytes, app.network);
-          const sentTxHash = await signer.sendTransaction(builtTx);
-          return { tx: builtTx, txHash: sentTxHash };
-        });
-
-        const output0 = tx.outputs[0]!;
-        const unid = deriveUnid(output0, manifest, txHash);
-        insertPendingVersion(app.db, {
-          txHash,
-          unid,
-          manifest,
-          ownerAddress: ownerAddressOf(lock, client.addressPrefix),
-        });
-
-        return {
-          status: 202,
-          body: {
-            tx_hash: txHash,
-            unid,
-            note: CUSTODIAL_TRADEOFF_NOTE,
-            cost: await costBreakdownBody(client, tx, app.network),
-          },
-        };
-      });
-    },
-  );
-
-  app.post(
-    "/proofs/:unid/versions",
-    {
-      schema: {
-        tags: ["proofs"],
-        summary: "Custodial new version: consumes the live cell, creates the successor",
-        params: UnidParams,
-        body: CustodialAnchorBodySchema,
-      },
-      preHandler: requireApiKey(app),
-    },
-    async (req, reply) => {
-      requireCustodialEnabled(app);
-      const apiKeyHash = req.apiKeyHash!;
-      return withIdempotency(app.db, req, reply, apiKeyHash, async () => {
-        const { unid } = req.params;
-        const project = getProjectDetail(app.db, unid);
-        if (!project?.active || !project.live_tx_hash) {
-          throw new NotFoundError(`No live project with unid "${unid}"`);
-        }
-
-        const client = app.getChainClient();
-        const signer = await app.getCustodialSigner();
-        const serviceLock = (await signer.getRecommendedAddressObj()).script;
-
-        const prevCell = await client.getCell({
-          txHash: project.live_tx_hash,
-          index: project.live_index,
-        });
-        if (!prevCell) throw new NotFoundError(`Live cell for "${unid}" not found on chain`);
-        if (!prevCell.cellOutput.lock.eq(serviceLock)) {
-          throw new ForbiddenError(
-            `Project "${unid}" is not owned by the custodial service wallet`,
-          );
-        }
-
-        const prevProof = await app.fetchProofFromChain(project.live_tx_hash);
-        const genesis = prevProof.manifest?.genesis ?? project.live_tx_hash;
-
-        const manifest = await buildFullManifest(req.body.manifest as ManifestDraft, {
-          genesis,
-          prev: project.live_tx_hash,
-        });
-        const bytes = manifestBytes(manifest);
-
-        const { tx, txHash } = await withFeeCellRetry(async () => {
-          const builtTx = await buildAnchor(client, serviceLock, bytes, app.network, {
-            prevOutPoint: prevCell.outPoint,
-            prevTypeScript: prevCell.cellOutput.type ?? undefined,
-          });
-          const sentTxHash = await signer.sendTransaction(builtTx);
-          return { tx: builtTx, txHash: sentTxHash };
-        });
-
-        insertPendingVersion(app.db, {
-          txHash,
-          unid,
-          manifest,
-          ownerAddress: ownerAddressOf(serviceLock, client.addressPrefix),
-        });
-
-        return {
-          status: 202,
-          body: {
-            tx_hash: txHash,
-            unid,
-            note: CUSTODIAL_TRADEOFF_NOTE,
-            cost: await costBreakdownBody(client, tx, app.network),
-          },
-        };
-      });
-    },
-  );
-
-  app.delete(
-    "/proofs/:unid",
-    {
-      schema: {
-        tags: ["proofs"],
-        summary: "Custodial withdraw: consumes the live cell, no successor",
-        params: UnidParams,
-      },
-      preHandler: requireApiKey(app),
-    },
-    async (req, reply) => {
-      requireCustodialEnabled(app);
-      const apiKeyHash = req.apiKeyHash!;
-      return withIdempotency(app.db, req, reply, apiKeyHash, async () => {
-        const { unid } = req.params;
-        const project = getProjectDetail(app.db, unid);
-        if (!project?.active || !project.live_tx_hash) {
-          throw new NotFoundError(`No live project with unid "${unid}"`);
-        }
-
-        const client = app.getChainClient();
-        const signer = await app.getCustodialSigner();
-        const serviceLock = (await signer.getRecommendedAddressObj()).script;
-
-        const liveCell = await client.getCell({
-          txHash: project.live_tx_hash,
-          index: project.live_index,
-        });
-        if (!liveCell) throw new NotFoundError(`Live cell for "${unid}" not found on chain`);
-        if (!liveCell.cellOutput.lock.eq(serviceLock)) {
-          throw new ForbiddenError(
-            `Project "${unid}" is not owned by the custodial service wallet`,
-          );
-        }
-
-        const tx = await buildWithdrawTx({
-          client,
-          lock: serviceLock,
-          outPoint: liveCell.outPoint,
-        });
-        const txHash = await signer.sendTransaction(tx);
-
-        markProjectWithdrawnPending(app.db, unid);
-
-        return {
-          status: 202,
-          body: {
-            tx_hash: txHash,
-            unid,
-            refund_capacity: tx.outputs[0]!.capacity.toString(),
-            note: CUSTODIAL_TRADEOFF_NOTE,
-          },
-        };
+        return submitAnchor(app, client, tx, output0, data0);
       });
     },
   );

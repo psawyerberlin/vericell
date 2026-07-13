@@ -54,10 +54,6 @@ export class ApiClient {
     return this.request<T>("POST", path, body);
   }
 
-  delete<T>(path: string): Promise<T> {
-    return this.request<T>("DELETE", path);
-  }
-
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
