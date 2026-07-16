@@ -1,6 +1,6 @@
 {
   "name": "api",
-  "version": "0.1.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "VeriCell Fastify REST API + indexer worker + DB.",
