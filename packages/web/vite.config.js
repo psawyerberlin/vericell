@@ -1,8 +1,12 @@
 import { fileURLToPath, URL } from "node:url";
+import { existsSync } from "node:fs";
 import { defineConfig } from "vite";
-
 function page(name) {
-  return fileURLToPath(new URL(name, import.meta.url));
+  const real = fileURLToPath(new URL(name, import.meta.url));
+  if (existsSync(real)) return real;
+  const example = fileURLToPath(new URL(name.replace(".html", "_example.html"), import.meta.url));
+  if (existsSync(example)) return example;
+  return real;
 }
 
 /**
