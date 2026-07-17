@@ -156,7 +156,9 @@ function statusText(data) {
   if (data.active === false) {
     return data.successor
       ? `SUPERSEDED — replaced by ${
-          typeof data.successor.versionNo === "number" ? `v${data.successor.versionNo}` : "a later version"
+          typeof data.successor.versionNo === "number"
+            ? `v${data.successor.versionNo}`
+            : "a later version"
         }: unid ${data.successor.unid}, tx ${data.successor.txHash} (${canonicalUnidUrl(data.successor.unid)})`
       : `SUPERSEDED — a later version now exists; look the project up at the verification link below to find it.`;
   }
@@ -569,7 +571,14 @@ async function renderCertificatePdf(data) {
     }
   }
   function wrapped(str, opts = {}) {
-    const { size = 10, f = font, color = ink, maxWidth = contentW, x = PDF_MARGIN, lineGap = 3 } = opts;
+    const {
+      size = 10,
+      f = font,
+      color = ink,
+      maxWidth = contentW,
+      x = PDF_MARGIN,
+      lineGap = 3,
+    } = opts;
     for (const l of wrapPdfText(str, f, size, maxWidth)) {
       ensure(size + lineGap);
       page.drawText(l, { x, y: y - size, size, font: f, color });
@@ -589,7 +598,13 @@ async function renderCertificatePdf(data) {
   function sectionHeader(title) {
     rule(14);
     ensure(9 + 10);
-    page.drawText(title.toUpperCase(), { x: PDF_MARGIN, y: y - 9, size: 9, font: bold, color: muted });
+    page.drawText(title.toUpperCase(), {
+      x: PDF_MARGIN,
+      y: y - 9,
+      size: 9,
+      font: bold,
+      color: muted,
+    });
     y -= 9 + 10;
   }
   const KV_LABEL_W = 150;
@@ -611,25 +626,46 @@ async function renderCertificatePdf(data) {
     const bannerText = `${label} CERTIFICATE — anchored on the Nervos CKB ${data.network}. Test CKB has no monetary value; this is NOT a mainnet proof.`;
     const bannerLines = wrapPdfText(bannerText, bold, 10, PDF_PAGE_W - 40);
     const bannerH = bannerLines.length * 13 + 14;
-    page.drawRectangle({ x: 0, y: PDF_PAGE_H - bannerH, width: PDF_PAGE_W, height: bannerH, color: warnBg });
+    page.drawRectangle({
+      x: 0,
+      y: PDF_PAGE_H - bannerH,
+      width: PDF_PAGE_W,
+      height: bannerH,
+      color: warnBg,
+    });
     let by = PDF_PAGE_H - 10;
     for (const l of bannerLines) {
       const tw = bold.widthOfTextAtSize(l, 10);
-      page.drawText(l, { x: (PDF_PAGE_W - tw) / 2, y: by - 10, size: 10, font: bold, color: warnInk });
+      page.drawText(l, {
+        x: (PDF_PAGE_W - tw) / 2,
+        y: by - 10,
+        size: 10,
+        font: bold,
+        color: warnInk,
+      });
       by -= 13;
     }
     y = PDF_PAGE_H - bannerH - 16;
   }
 
   wrapped("VeriCell", { size: 18, f: bold, color: ink, lineGap: 4 });
-  wrapped("PROOF OF EXISTENCE, INTEGRITY, OWNERSHIP AND TIME", { size: 8, f: mono, color: accent, lineGap: 2 });
+  wrapped("PROOF OF EXISTENCE, INTEGRITY, OWNERSHIP AND TIME", {
+    size: 8,
+    f: mono,
+    color: accent,
+    lineGap: 2,
+  });
   y -= 6;
 
   wrapped(data.title, { size: 17, f: bold, color: ink, lineGap: 3 });
   y -= 2;
 
   const versionPrefix = typeof data.versionNo === "number" ? `Version ${data.versionNo} · ` : "";
-  wrapped(`${versionPrefix}Network: ${data.network.toUpperCase()}`, { size: 10, color: ink, lineGap: 3 });
+  wrapped(`${versionPrefix}Network: ${data.network.toUpperCase()}`, {
+    size: 10,
+    color: ink,
+    lineGap: 3,
+  });
   wrapped(statusText(data), {
     size: 9.5,
     f: data.active === false ? bold : font,
@@ -663,7 +699,13 @@ async function renderCertificatePdf(data) {
     function drawTableHeader() {
       ensure(rowLineH + 6);
       page.drawText("Path", { x: PDF_MARGIN, y: y - 9, size: 9, font: bold, color: ink });
-      page.drawText("SHA-256", { x: PDF_MARGIN + pathColW + colGap, y: y - 9, size: 9, font: bold, color: ink });
+      page.drawText("SHA-256", {
+        x: PDF_MARGIN + pathColW + colGap,
+        y: y - 9,
+        size: 9,
+        font: bold,
+        color: ink,
+      });
       y -= 9 + 4;
       page.drawLine({
         start: { x: PDF_MARGIN, y },
@@ -680,7 +722,14 @@ async function renderCertificatePdf(data) {
       const rowLines = Math.max(pathLines.length, hashLines.length);
       for (let i = 0; i < rowLines; i++) {
         ensure(rowLineH, drawTableHeader);
-        if (pathLines[i]) page.drawText(pathLines[i], { x: PDF_MARGIN, y: y - rowSize, size: rowSize, font, color: ink });
+        if (pathLines[i])
+          page.drawText(pathLines[i], {
+            x: PDF_MARGIN,
+            y: y - rowSize,
+            size: rowSize,
+            font,
+            color: ink,
+          });
         if (hashLines[i])
           page.drawText(hashLines[i], {
             x: PDF_MARGIN + pathColW + colGap,
@@ -734,10 +783,20 @@ async function renderCertificatePdf(data) {
       page.drawImage(qrImage, { x: boxX + qrPad, y: boxY + qrPad, width: qrSize, height: qrSize });
     }
 
-    wrapped("Canonical verification link:", { size: 9, color: muted, maxWidth: linksColW, lineGap: 2 });
+    wrapped("Canonical verification link:", {
+      size: 9,
+      color: muted,
+      maxWidth: linksColW,
+      lineGap: 2,
+    });
     wrapped(url, { size: 9, f: mono, color: accent, maxWidth: linksColW, lineGap: 2 });
     y -= 6;
-    wrapped("Block-explorer transaction link:", { size: 9, color: muted, maxWidth: linksColW, lineGap: 2 });
+    wrapped("Block-explorer transaction link:", {
+      size: 9,
+      color: muted,
+      maxWidth: linksColW,
+      lineGap: 2,
+    });
     wrapped(explorerLink, { size: 9, f: mono, color: accent, maxWidth: linksColW, lineGap: 2 });
 
     if (qrImage) y = Math.min(y, sectionTop - boxSize - 8);
